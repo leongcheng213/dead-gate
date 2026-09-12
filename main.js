@@ -69,6 +69,7 @@ function makePlayer(slot, name) {
     hp: 100, maxHp: 100, speed: 9, radius: 0.7,
     aim: new THREE.Vector3(0, 0, -1), weaponIndex: 0,
     alive: true, ghost: false, kit: 0, money: 0,
+    ars: null, charging: false, chargeT: 0,
     corpse: null, corpseArrow: null, corpseSeed: 0, corpsePos: null, _orig: null,
     cool: 0, hurtCd: 0, flashT: 0,
     net: { keys: {}, ax: 0, az: -1, fire: false, wsel: -1 } };
@@ -171,7 +172,11 @@ function ensurePlayersForPeers() {
   try {
     if (!scene) return;
     for (const m of (NET.peers || [])) {
-      if (!players[m.slot]) players[m.slot] = makePlayer(m.slot, m.name);
+      if (!players[m.slot]) {
+        const np = makePlayer(m.slot, m.name);
+        np.ars = newArsenal();
+        players[m.slot] = np;
+      }
       else if (players[m.slot].tag) {
         // refresh name sprite if changed
         try {
@@ -422,7 +427,19 @@ function buildSnapshot() {
     ammo: WEAPONS.map((x) => (x.ammo === Infinity ? -1 : x.ammo)),
     up: WEAPONS.map((x) => (x.up || 0)),
   };
-  return { t: 'snap', seq: ++NET.seq, g, ps, zs, ds, ms, w };
+  // Per-hunter arsenals (co-op): unlocks, levels, ammo per slot.
+  const pa = {};
+  if (isNet()) {
+    for (const p of players) {
+      if (!p || !p.group || !p.ars) continue;
+      pa[p.slot] = {
+        un: p.ars.map((x) => x.unlocked ? 1 : 0),
+        up: p.ars.map((x) => (x.up || 0)),
+        am: p.ars.map((x) => (x.ammo === Infinity ? -1 : x.ammo)),
+      };
+    }
+  }
+  return { t: 'snap', seq: ++NET.seq, g, ps, zs, ds, ms, w, pa };
 }
 function guestCoinMesh(x, z) {
   const m = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.07, 12),
@@ -452,12 +469,14 @@ function applySnapshot(s) {
     G.lives = s.g.lives; G.state = s.g.state; G.isBossRound = !!s.g.boss;
     G.hpUps = s.g.hpUps || 0; G.defUps = s.g.defUps || 0; G.spdUps = s.g.spdUps || 0;
     G.defense = s.g.defense || 0;
-    // Shared arsenal.
+    // Team-wide reveals come from the global track; unlocks/levels/ammo
+    // are personal (s.pa per slot) in co-op.
     try {
       if (s.w) {
         for (let i = 0; i < WEAPONS.length; i++) {
           const w = WEAPONS[i];
           if (s.w.rev && s.w.rev[i] !== undefined) w.revealed = !!s.w.rev[i];
+          if (isNet()) continue; // personal arsenals below; never touch globals
           if (s.w.un && s.w.un[i] !== undefined) w.unlocked = !!s.w.un[i];
           if (s.w.ammo && s.w.ammo[i] !== undefined) w.ammo = (s.w.ammo[i] < 0 ? Infinity : s.w.ammo[i]);
           if (s.w.up && s.w.up[i] !== undefined) {
@@ -467,6 +486,22 @@ function applySnapshot(s) {
             try { refreshWeapon(w); } catch (e) {}
             // Keep current ammo inside the (possibly grown) mag.
             if (w.ammo !== Infinity && s.w.ammo && s.w.ammo[i] >= 0) w.ammo = s.w.ammo[i];
+          }
+        }
+      }
+      if (isNet() && s.pa) {
+        for (const slotKey in s.pa) {
+          const sl = +slotKey;
+          const p = players[sl];
+          const sd = s.pa[slotKey];
+          if (!p || !sd) continue;
+          if (!p.ars) p.ars = newArsenal();
+          for (let i = 0; i < WEAPONS.length && i < p.ars.length; i++) {
+            const e = p.ars[i];
+            if (sd.un && sd.un[i] !== undefined) e.unlocked = !!sd.un[i];
+            if (sd.up && sd.up[i] !== undefined) e.up = Math.min(UP_MAX, sd.up[i] || 0);
+            if (sd.am && sd.am[i] !== undefined) e.ammo = (sd.am[i] < 0 ? Infinity : sd.am[i]);
+            try { refreshWeapon(e); } catch (err) {}
           }
         }
       }
@@ -484,6 +519,7 @@ function applySnapshot(s) {
             if (peer) nm = peer.name;
           } catch (e) {}
           p = makePlayer(d.slot, nm);
+          p.ars = newArsenal();
           players[d.slot] = p;
           if (d.slot === NET.slot) player = p;
         }
@@ -687,7 +723,7 @@ function updateGuestVisuals(dt) {
     try {
       if (player && player.alive && (keys.Space || G.mouseFireHeld)) {
         const now = performance.now() / 1000;
-        const w = WEAPONS[player.weaponIndex];
+        const w = AW(player)[player.weaponIndex];
         if (w && w.unlocked && now - NET_GUEST_SHOT > Math.max(0.05, w.cooldown)) {
           NET_GUEST_SHOT = now;
           player.flash.visible = true; player.flashT = 0.06;
@@ -781,39 +817,53 @@ const MAPS = {
 // (Lv15 max): every level boosts damage + fire rate + mag, and every 3 levels
 // adds pierce (guns) or blast (explosives). kind: gun | grenade | rocket | mine.
 // key: keyboard key (1-9,0). drop: ammo per ◆ bullets pickup. blast: AoE radius.
-const WEAPONS = [
-  { name: 'Pistol',   icon: '🔫', key: '1', kind: 'gun',     damage: 34,  cooldown: 0.26,  bulletSpeed: 46, range: 30, spread: 0.02,  pellets: 1, ammo: Infinity, maxAmmo: Infinity, drop: 0,  color: 0xffff66, freq: 750, unlockKills: 0,   unlocked: true,  up: 0, pierce: 0, blast: 0 },
-  { name: 'Rifle',    icon: '🔥', key: '2', kind: 'gun',     damage: 24,  cooldown: 0.115, bulletSpeed: 60, range: 38, spread: 0.07,  pellets: 1, ammo: 120,      maxAmmo: 400,      drop: 12, color: 0x66ccff, freq: 420, unlockKills: 20,   unlocked: false, up: 0, pierce: 0, blast: 0 },
-  { name: 'Shotgun',  icon: '💥', key: '3', kind: 'gun',     damage: 18,  cooldown: 0.8,   bulletSpeed: 40, range: 22, spread: 0.24,  pellets: 6, ammo: 24,       maxAmmo: 100,      drop: 4,  color: 0xff8833, freq: 160, unlockKills: 50,  unlocked: false, up: 0, pierce: 0, blast: 0 },
-  { name: 'SMG',      icon: '⚡', key: '4', kind: 'gun',     damage: 14,  cooldown: 0.07,  bulletSpeed: 55, range: 26, spread: 0.09,  pellets: 1, ammo: 200,      maxAmmo: 500,      drop: 30, color: 0xaaffff, freq: 600, unlockKills: 90,  unlocked: false, up: 0, pierce: 0, blast: 0 },
-  { name: 'Sniper',   icon: '🔭', key: '5', kind: 'gun',     damage: 220, cooldown: 1.3,   bulletSpeed: 95, range: 60, spread: 0.005, pellets: 1, ammo: 20,       maxAmmo: 60,       drop: 4,  color: 0xccffcc, freq: 200, unlockKills: 140,  unlocked: false, up: 0, pierce: 2, blast: 0 },
-  { name: 'Crossbow', icon: '🏹', key: '6', kind: 'gun',     damage: 110, cooldown: 0.55,  bulletSpeed: 70, range: 45, spread: 0.01,  pellets: 1, ammo: 30,       maxAmmo: 90,       drop: 6,  color: 0xddeedd, freq: 340, unlockKills: 200, unlocked: false, up: 0, pierce: 1, blast: 0 },
-  { name: 'Minigun',  icon: '🌀', key: '7', kind: 'gun',     damage: 20,  cooldown: 0.05,  bulletSpeed: 60, range: 30, spread: 0.09,  pellets: 1, ammo: 400,      maxAmmo: 800,      drop: 60, color: 0xffcc00, freq: 500, unlockKills: 280, unlocked: false, up: 0, pierce: 0, blast: 0 },
-  { name: 'Grenade',  icon: '💣', key: '8', kind: 'grenade', damage: 140, cooldown: 1.0,   bulletSpeed: 16, range: 20, spread: 0,     pellets: 1, ammo: 10,       maxAmmo: 30,       drop: 2,  color: 0x77ff44, freq: 180, unlockKills: 370, unlocked: false, up: 0, pierce: 0, blast: 4.5 },
-  { name: 'Rocket',   icon: '🚀', key: '9', kind: 'rocket',  damage: 130, cooldown: 1.1,   bulletSpeed: 40, range: 40, spread: 0,     pellets: 1, ammo: 12,       maxAmmo: 36,       drop: 3,  color: 0xff6644, freq: 140, unlockKills: 470, unlocked: false, up: 0, pierce: 0, blast: 4 },
-  { name: 'Mine',     icon: '⚫', key: '0', kind: 'mine',    damage: 200, cooldown: 0.8,   bulletSpeed: 0,  range: 0,  spread: 0,     pellets: 1, ammo: 8,        maxAmmo: 24,       drop: 2,  color: 0x888888, freq: 260, unlockKills: 580, unlocked: false, up: 0, pierce: 0, blast: 5 },
-  { name: 'Plasma',   icon: '🔮', key: '-', kind: 'gun',     damage: 80,  cooldown: 0.28,  bulletSpeed: 75, range: 50, spread: 0.05,  pellets: 2, ammo: 100,      maxAmmo: 200,      drop: 12, color: 0xcc66ff, freq: 660, unlockKills: 700, unlocked: false, up: 0, pierce: 1, blast: 0 },
-  { name: 'Bane',     icon: '☠️', key: '=', kind: 'gun',     damage: 170, cooldown: 0.45,  bulletSpeed: 80, range: 55, spread: 0.06,  pellets: 3, ammo: 60,       maxAmmo: 120,      drop: 8,  color: 0xff00ff, freq: 240, unlockKills: 850, unlocked: false, up: 0, pierce: 1, blast: 0 },
-];
-WEAPONS.forEach((w) => { w.baseAmmo = w.ammo; w.revealed = w.unlockKills === 0; w.base = { damage: w.damage, cooldown: w.cooldown, range: w.range, pierce: w.pierce, blast: w.blast, maxAmmo: w.maxAmmo }; });
+// wallIgnore: railgun bolts fly through walls AND zombies.
+function baseWeaponDefs() { return [
+  { name: 'Pistol',   icon: '🔫', key: '1', kind: 'gun',     damage: 34,  cooldown: 0.26,  bulletSpeed: 46, range: 30, spread: 0.02,  pellets: 1, ammo: Infinity, maxAmmo: Infinity, drop: 0,  color: 0xffff66, freq: 750, unlockKills: 0,    unlocked: true,  up: 0, pierce: 0, blast: 0, wallIgnore: false },
+  { name: 'Rifle',    icon: '🔥', key: '2', kind: 'gun',     damage: 24,  cooldown: 0.115, bulletSpeed: 60, range: 38, spread: 0.07,  pellets: 1, ammo: 120,      maxAmmo: 400,      drop: 12, color: 0x66ccff, freq: 420, unlockKills: 20,   unlocked: false, up: 0, pierce: 0, blast: 0, wallIgnore: false },
+  { name: 'Shotgun',  icon: '💥', key: '3', kind: 'gun',     damage: 18,  cooldown: 0.8,   bulletSpeed: 40, range: 22, spread: 0.24,  pellets: 6, ammo: 24,       maxAmmo: 100,      drop: 4,  color: 0xff8833, freq: 160, unlockKills: 50,   unlocked: false, up: 0, pierce: 0, blast: 0, wallIgnore: false },
+  { name: 'SMG',      icon: '⚡', key: '4', kind: 'gun',     damage: 14,  cooldown: 0.07,  bulletSpeed: 55, range: 26, spread: 0.09,  pellets: 1, ammo: 200,      maxAmmo: 500,      drop: 30, color: 0xaaffff, freq: 600, unlockKills: 90,   unlocked: false, up: 0, pierce: 0, blast: 0, wallIgnore: false },
+  { name: 'Sniper',   icon: '🔭', key: '5', kind: 'gun',     damage: 220, cooldown: 1.3,   bulletSpeed: 95, range: 60, spread: 0.005, pellets: 1, ammo: 20,       maxAmmo: 60,       drop: 4,  color: 0xccffcc, freq: 200, unlockKills: 140,  unlocked: false, up: 0, pierce: 2, blast: 0, wallIgnore: false },
+  { name: 'Minigun',  icon: '🌀', key: '6', kind: 'gun',     damage: 20,  cooldown: 0.05,  bulletSpeed: 60, range: 30, spread: 0.09,  pellets: 1, ammo: 400,      maxAmmo: 800,      drop: 60, color: 0xffcc00, freq: 500, unlockKills: 280,  unlocked: false, up: 0, pierce: 0, blast: 0, wallIgnore: false },
+  { name: 'Grenade',  icon: '💣', key: '7', kind: 'grenade', damage: 140, cooldown: 1.0,   bulletSpeed: 16, range: 20, spread: 0,     pellets: 1, ammo: 10,       maxAmmo: 30,       drop: 2,  color: 0x77ff44, freq: 180, unlockKills: 370,  unlocked: false, up: 0, pierce: 0, blast: 4.5, wallIgnore: false },
+  { name: 'Rocket',   icon: '🚀', key: '8', kind: 'rocket',  damage: 130, cooldown: 1.1,   bulletSpeed: 40, range: 40, spread: 0,     pellets: 1, ammo: 12,       maxAmmo: 36,       drop: 3,  color: 0xff6644, freq: 140, unlockKills: 470,  unlocked: false, up: 0, pierce: 0, blast: 4, wallIgnore: false },
+  { name: 'Mine',     icon: '⚫', key: '9', kind: 'mine',    damage: 200, cooldown: 0.8,   bulletSpeed: 0,  range: 0,  spread: 0,     pellets: 1, ammo: 8,        maxAmmo: 24,       drop: 2,  color: 0x888888, freq: 260, unlockKills: 580,  unlocked: false, up: 0, pierce: 0, blast: 5, wallIgnore: false },
+  { name: 'Plasma',   icon: '🔮', key: '0', kind: 'gun',     damage: 80,  cooldown: 0.28,  bulletSpeed: 75, range: 50, spread: 0.05,  pellets: 2, ammo: 100,      maxAmmo: 200,      drop: 12, color: 0xcc66ff, freq: 660, unlockKills: 700,  unlocked: false, up: 0, pierce: 1, blast: 0, wallIgnore: false },
+  { name: 'Bane',     icon: '☠️', key: '-', kind: 'gun',     damage: 170, cooldown: 0.45,  bulletSpeed: 80, range: 55, spread: 0.06,  pellets: 3, ammo: 60,       maxAmmo: 120,      drop: 8,  color: 0xff00ff, freq: 240, unlockKills: 850,  unlocked: false, up: 0, pierce: 1, blast: 0, wallIgnore: false },
+  { name: 'Railgun',  icon: '🔱', key: '=', kind: 'gun',     damage: 160, cooldown: 1.0,   bulletSpeed: 90, range: 70, spread: 0.005, pellets: 1, ammo: 24,       maxAmmo: 72,       drop: 5,  color: 0x66ffff, freq: 180, unlockKills: 1000, unlocked: false, up: 0, pierce: 5, blast: 0, wallIgnore: true },
+]; }
 const WBLURB = [
   'Trusty sidearm with endless ammo. Simple and steady.',
   'Rapid-fire workhorse, good at everything.',
   'Twin barrels for point-blank devastation.',
   'Bullet hose. Tiny hits at insane speed.',
   'One shot one kill. Huge range, slow cycle.',
-  'Silent precise bolts with heavy punch.',
   'Hold the trigger for a storm of lead.',
-  'Lobbed boom with a wide blast. It hurts YOU too, keep distance.',
+  'Hold CLICK to charge, release to lob it far. It hurts YOU too, keep distance.',
   'Fast rocket with a hot blast. Mind the splash on yourself.',
   'Set it and forget it. Proximity boom, watch your step.',
   'Twin plasma bolts that melt packs.',
   'Skull cannon. Triple-shot room clearer.',
+  'Fires supersonic slugs through walls AND zombies. Nothing hides.',
 ];
-WEAPONS.forEach((w, i) => { w.blurb = WBLURB[i]; });
+function initArsenal(A) {
+  A.forEach((w, i) => {
+    w.baseAmmo = w.ammo;
+    w.revealed = w.unlockKills === 0;
+    w.base = { damage: w.damage, cooldown: w.cooldown, range: w.range, pierce: w.pierce, blast: w.blast, maxAmmo: w.maxAmmo };
+    w.blurb = WBLURB[i];
+  });
+  return A;
+}
+const WEAPONS = initArsenal(baseWeaponDefs());
+// Per-hunter arsenal: solo shares the global WEAPONS; in co-op every player
+// owns their unlocks, levels and ammo (reveals stay team-wide via WEAPONS).
+function newArsenal() { return initArsenal(baseWeaponDefs()); }
+function AW(p) { return (isNet() && p && p.ars) ? p.ars : WEAPONS; }
 // Shop economy: $ prices parallel to WEAPONS; one combined upgrade track (Lv15 max).
-const WPRICE = [0, 100, 200, 350, 550, 800, 1100, 1500, 2000, 2600, 3200, 4000];
-const WKNOCK = [0.4, 0.3, 1.2, 0.15, 1.5, 0.8, 0.1, 0, 0, 0, 0.5, 1.0]; // per-gun shove (explosives use blast)
+// Order: Pistol Rifle Shotgun SMG Sniper Minigun Grenade Rocket Mine Plasma Bane Railgun.
+const WPRICE = [0, 100, 200, 350, 550, 1100, 1500, 2000, 2600, 3200, 4000, 4800];
+const WKNOCK = [0.4, 0.3, 1.2, 0.15, 1.5, 0.1, 0, 0, 0, 0.5, 1.0, 1.2]; // per-gun shove (explosives use blast)
 const SHOP = { medkit: 150, medkitHeal: 50, life: 1500, kit: 800, kitHeal: 100 };
 const UP_MAX = 15;
 // total kills needed to reach each combined level (index = target level 1..15)
@@ -829,8 +879,9 @@ function spdCost() { return 250 + 200 * G.spdUps; }
 // Ammo is priced by the bullet: a full refill costs 15% of the weapon price,
 // and topping up costs that pro-rata for the missing rounds (rounded, min $1).
 function ammoFullCost(i) { return Math.max(10, Math.round(WPRICE[i] * 0.15)); }
-function ammoCost(i) {
-  const w = WEAPONS[i];
+function ammoCost(i, A) {
+  A = A || AW(player);
+  const w = A[i];
   if (!w || w.ammo === Infinity || w.maxAmmo === Infinity) return 0;
   const missing = Math.max(0, w.maxAmmo - w.ammo);
   if (missing <= 0) return 0;
@@ -1031,9 +1082,10 @@ window.addEventListener('wheel', (e) => {
   if (G.state !== 'playing' && G.state !== 'intermission') return;
   const dir = e.deltaY > 0 ? 1 : -1;
   let i = G.weaponIndex;
-  for (let k = 0; k < WEAPONS.length; k++) {
-    i = (i + dir + WEAPONS.length) % WEAPONS.length;
-    if (WEAPONS[i].unlocked) { switchWeapon(i); break; }
+  const LA = AW(player);
+  for (let k = 0; k < LA.length; k++) {
+    i = (i + dir + LA.length) % LA.length;
+    if (LA[i].unlocked && WEAPONS[i].revealed) { switchWeapon(i); break; }
   }
 }, { passive: true });
 window.addEventListener('resize', () => {
@@ -1176,10 +1228,11 @@ function buildMap(mapKey) {
 }
 
 // ============ HAND WEAPONS (a visible model per weapon, held at the hip) ============
+// Order: Pistol Rifle Shotgun SMG Sniper Minigun Grenade Rocket Mine Plasma Bane Railgun.
 const MUZZLE = [ // muzzle-flash position per weapon [x,y,z]; [0,0,0] = no flash
   [0.35,1.15,1.1],[0.35,1.15,1.55],[0.35,1.15,1.3],[0.35,1.15,1.1],[0.35,1.25,1.95],
-  [0.35,1.15,1.25],[0.35,1.15,1.45],[0,0,0],[0.35,1.2,1.55],[0,0,0],
-  [0.35,1.15,1.35],[0.35,1.2,1.6]
+  [0.35,1.15,1.45],[0,0,0],[0.35,1.2,1.55],[0,0,0],[0.35,1.15,1.35],
+  [0.35,1.2,1.6],[0.35,1.25,2.0]
 ];
 function gunPart(group, geo, color, x, y, z, emissive) {
   const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.4, emissive: emissive || 0x000000 }));
@@ -1213,28 +1266,45 @@ function buildGunMesh(i) {
     const sc = gunPart(g, new THREE.CylinderGeometry(0.07,0.07,0.3,8), 0x111111, 0.35,1.32,0.45);
     sc.rotation.x = Math.PI / 2;
     gunPart(g, new THREE.BoxGeometry(0.13,0.16,0.6), 0x3a5a2a, 0.35,1.1,0.35);
-  } else if (i === 5) { // crossbow: stock + bow arms + bolt
-    gunPart(g, new THREE.BoxGeometry(0.1,0.1,0.9), 0x4a3222, 0.35,1.15,0.5);
-    gunPart(g, new THREE.BoxGeometry(0.7,0.07,0.1), dark, 0.35,1.15,0.85);
-    gunPart(g, new THREE.BoxGeometry(0.06,0.06,0.5), 0xaaaaaa, 0.35,1.19,0.7);
-  } else if (i === 6) { // minigun: triple barrels + motor box
+  } else if (i === 5) { // minigun: triple barrels + motor box
     for (let k = -1; k <= 1; k++) {
       const b = gunPart(g, new THREE.CylinderGeometry(0.045,0.045,1.0,6), 0x333333, 0.35 + k * 0.09, 1.15, 0.7);
       b.rotation.x = Math.PI / 2;
     }
     gunPart(g, new THREE.BoxGeometry(0.34,0.24,0.5), 0x225522, 0.35,1.12,0.25);
-  } else if (i === 7) { // grenade in hand
+  } else if (i === 6) { // grenade in hand
     gunPart(g, new THREE.SphereGeometry(0.16, 10, 10), 0x2a7a2a, 0.35,1.05,0.45);
     gunPart(g, new THREE.BoxGeometry(0.06,0.08,0.06), 0x888888, 0.35,1.2,0.45);
-  } else if (i === 8) { // rocket tube + warhead tip
+  } else if (i === 7) { // rocket tube + warhead tip
     const t = gunPart(g, new THREE.CylinderGeometry(0.16,0.18,1.3,10), 0x446644, 0.35,1.2,0.6);
     t.rotation.x = Math.PI / 2;
     const r = gunPart(g, new THREE.CylinderGeometry(0.19,0.19,0.15,10), dark, 0.35,1.2,0.1);
     r.rotation.x = Math.PI / 2;
     gunPart(g, new THREE.SphereGeometry(0.09,8,8), 0xff3333, 0.35,1.2,1.28);
-  } else { // mine layer: box + red arming light
+  } else if (i === 8) { // mine layer: box + red arming light
     gunPart(g, new THREE.BoxGeometry(0.3,0.14,0.3), 0x555555, 0.35,1.0,0.45);
     gunPart(g, new THREE.SphereGeometry(0.06,8,8), 0xff2222, 0.35,1.1,0.45, 0xff2222);
+  } else if (i === 9) { // plasma: twin coils + violet tips
+    for (let k = -1; k <= 1; k += 2) {
+      const b = gunPart(g, new THREE.CylinderGeometry(0.05,0.05,1.1,8), 0x331144, 0.35 + k * 0.1, 1.15, 0.7);
+      b.rotation.x = Math.PI / 2;
+      gunPart(g, new THREE.SphereGeometry(0.06,8,8), 0xcc66ff, 0.35 + k * 0.1, 1.15, 1.28, 0xcc66ff);
+    }
+    gunPart(g, new THREE.BoxGeometry(0.3,0.2,0.5), 0x221122, 0.35,1.1,0.25);
+  } else if (i === 10) { // bane: wide triple cannon + skull bell
+    for (let k = -1; k <= 1; k++) {
+      const b = gunPart(g, new THREE.CylinderGeometry(0.06,0.06,1.2,8), 0x441144, 0.35 + k * 0.12, 1.15, 0.75);
+      b.rotation.x = Math.PI / 2;
+    }
+    gunPart(g, new THREE.SphereGeometry(0.12,8,8), 0xff00ff, 0.35,1.32,0.4, 0xff00ff);
+  } else { // railgun: long twin rails + cyan coils, shoots through walls
+    for (let k = -1; k <= 1; k += 2) {
+      const b = gunPart(g, new THREE.CylinderGeometry(0.04,0.04,1.9,6), 0x224444, 0.35 + k * 0.1, 1.18, 0.9);
+      b.rotation.x = Math.PI / 2;
+      gunPart(g, new THREE.SphereGeometry(0.055,8,8), 0x66ffff, 0.35 + k * 0.1, 1.18, 1.5, 0x66ffff);
+      gunPart(g, new THREE.SphereGeometry(0.055,8,8), 0x66ffff, 0.35 + k * 0.1, 1.18, 1.0, 0x66ffff);
+    }
+    gunPart(g, new THREE.BoxGeometry(0.26,0.2,0.5), 0x113333, 0.35,1.1,0.2);
   }
   return g;
 }
@@ -1242,7 +1312,11 @@ function buildGunMesh(i) {
 function createPlayer() {
   clearPlayers();
   if (isNet()) {
-    for (const m of NET.peers) players[m.slot] = makePlayer(m.slot, m.name);
+    for (const m of NET.peers) {
+      const p = makePlayer(m.slot, m.name);
+      p.ars = newArsenal(); // co-op: personal unlocks, levels and ammo
+      players[m.slot] = p;
+    }
   } else {
     players = [makePlayer(0, 'You')];
   }
@@ -1264,10 +1338,20 @@ function spawnZombie(forceType, atPos) {
   if (type === 'spitter') { hp = Math.round(hp * 0.8); speed *= 0.8; scoreMult = 1.3; }
   else if (type === 'bomber') { hp = Math.round(hp * 0.7); speed = Math.min(7, speed * 1.5); scoreMult = 1.5; }
   else if (type === 'speeder') { hp = Math.round(hp * 0.4); speed = Math.min(8, speed * 2.1); damage = Math.round(5 + round); scoreMult = 1.2; }
+  else if (type === 'dasher') { hp = Math.round(hp * 0.6); speed *= 1.1; scoreMult = 1.3; }
+  else if (type === 'leaper') { hp = Math.round(hp * 0.9); speed *= 0.9; scoreMult = 1.4; }
+  else if (type === 'splitter') { hp = Math.round(hp * 1.2); speed *= 0.7; scoreMult = 1.6; }
+  else if (type === 'mender') { hp = Math.round(hp * 0.6); speed *= 0.75; scoreMult = 1.8; }
+  else if (type === 'shade') { hp = Math.round(hp * 0.7); speed = Math.min(7.5, speed * 1.25); scoreMult = 1.5; }
 
   const g = new THREE.Group();
   let bodyMat, baseColor, core = null;
   let armL = null, armR = null; // tagged for the attack swing
+  let headMat = null; // shade fade needs the head material too
+  let dashCd = 2 + Math.random(), dashT = 0;
+  let leapCd = 2 + Math.random() * 2, leapT = 0, leapDur = 0.55, leaping = false;
+  let leapFrom = null, leapTo = null;
+  let healCd = 2;
   if (type === 'spitter') {
     // purple spitter: glowing cyan mouth, lobs globs from range
     bodyMat = new THREE.MeshStandardMaterial({ color: 0x7a2a9a, roughness: 0.9 });
@@ -1315,6 +1399,84 @@ function spawnZombie(forceType, atPos) {
     const e1 = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 6), eyeMat); e1.position.set(-0.1, 1.55, 0.24);
     const e2 = e1.clone(); e2.position.x = 0.1;
     g.add(body, head, e1, e2);
+  } else if (type === 'dasher') {
+    // lean orange dasher: stalks slowly, then suddenly sprints in bursts
+    bodyMat = new THREE.MeshStandardMaterial({ color: 0xcc6622, roughness: 0.9 });
+    baseColor = new THREE.Color(0xcc6622);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.55, 1.0, 0.45), bodyMat);
+    body.position.y = 0.9; body.rotation.x = 0.25; body.castShadow = true;
+    headMat = new THREE.MeshStandardMaterial({ color: 0xdd8833, roughness: 1 });
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.27, 12, 12), headMat);
+    head.position.y = 1.6; head.castShadow = true;
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+    const e1 = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 6), eyeMat); e1.position.set(-0.1, 1.65, 0.24);
+    const e2 = e1.clone(); e2.position.x = 0.1;
+    const armMat = new THREE.MeshStandardMaterial({ color: 0xcc6622, roughness: 1 });
+    const a1 = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.8), armMat); a1.position.set(-0.36, 1.0, 0.45);
+    const a2 = a1.clone(); a2.position.x = 0.36;
+    armL = a1; armR = a2;
+  g.add(body, head, e1, e2, a1, a2);
+  } else if (type === 'leaper') {
+    // squat teal leaper: crouches, then pounces clean over cover
+    bodyMat = new THREE.MeshStandardMaterial({ color: 0x2a9a8a, roughness: 0.9 });
+    baseColor = new THREE.Color(0x2a9a8a);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.7, 0.6), bodyMat);
+    body.position.y = 0.6; body.castShadow = true;
+    headMat = new THREE.MeshStandardMaterial({ color: 0x3abbaa, roughness: 1 });
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 12), headMat);
+    head.position.y = 1.2; head.castShadow = true;
+    const legMat = new THREE.MeshStandardMaterial({ color: 0x1a6a5a, roughness: 1 });
+    const l1 = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.5, 0.3), legMat); l1.position.set(-0.25, 0.25, 0);
+    const l2 = l1.clone(); l2.position.x = 0.25;
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+    const e1 = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 6), eyeMat); e1.position.set(-0.11, 1.28, 0.26);
+    const e2 = e1.clone(); e2.position.x = 0.11;
+  g.add(body, head, l1, l2, e1, e2);
+  } else if (type === 'splitter') {
+    // wobbling pale splitter: pops into two speeders when killed
+    bodyMat = new THREE.MeshStandardMaterial({ color: 0x9acc66, roughness: 0.7 });
+    baseColor = new THREE.Color(0x9acc66);
+    const body = new THREE.Mesh(new THREE.SphereGeometry(0.62, 12, 12), bodyMat);
+    body.position.y = 0.85; body.castShadow = true;
+    core = new THREE.Mesh(new THREE.SphereGeometry(0.2, 10, 10),
+      new THREE.MeshBasicMaterial({ color: 0xddff88 }));
+    core.position.set(0, 0.85, 0.45);
+    headMat = new THREE.MeshStandardMaterial({ color: 0xbbdd88, roughness: 1 });
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 12), headMat);
+    head.position.y = 1.65; head.castShadow = true;
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x336622 });
+    const e1 = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 6), eyeMat); e1.position.set(-0.1, 1.7, 0.25);
+    const e2 = e1.clone(); e2.position.x = 0.1;
+  g.add(body, head, core, e1, e2);
+  } else if (type === 'mender') {
+    // white mender with a red cross: fragile, but patches up nearby zombies
+    bodyMat = new THREE.MeshStandardMaterial({ color: 0xddddcc, roughness: 0.9 });
+    baseColor = new THREE.Color(0xddddcc);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.0, 0.5), bodyMat);
+    body.position.y = 0.95; body.castShadow = true;
+    const crossMat = new THREE.MeshBasicMaterial({ color: 0xff3333 });
+    const c1 = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.1, 0.05), crossMat); c1.position.set(0, 1.05, 0.28);
+    const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, 0.05), crossMat); c2.position.set(0, 1.05, 0.28);
+    headMat = new THREE.MeshStandardMaterial({ color: 0xeeeedd, roughness: 1 });
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 12), headMat);
+    head.position.y = 1.75; head.castShadow = true;
+    const halo = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0x66ff99 }));
+    halo.position.set(0, 2.15, 0);
+  g.add(body, head, c1, c2, halo);
+  } else if (type === 'shade') {
+    // near-invisible shade: only solidifies when it gets close
+    bodyMat = new THREE.MeshStandardMaterial({ color: 0x3a3a55, roughness: 0.9, transparent: true, opacity: 0.2 });
+    baseColor = new THREE.Color(0x3a3a55);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.1, 0.5), bodyMat);
+    body.position.y = 1.0; body.castShadow = true;
+    headMat = new THREE.MeshStandardMaterial({ color: 0x4a4a66, roughness: 1, transparent: true, opacity: 0.2 });
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.32, 12, 12), headMat);
+    head.position.y = 1.85; head.castShadow = true;
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff00ff });
+    const e1 = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 6), eyeMat); e1.position.set(-0.12, 1.9, 0.28);
+    const e2 = e1.clone(); e2.position.x = 0.12;
+  g.add(body, head, e1, e2);
   } else {
     const c = zombieGreens[Math.floor(Math.random() * zombieGreens.length)];
     bodyMat = new THREE.MeshStandardMaterial({ color: c, roughness: 0.95 });
@@ -1348,11 +1510,12 @@ function spawnZombie(forceType, atPos) {
   g.rotation.y = Math.PI; // facing player (+z)
   scene.add(g);
   zombies.push({
-    group: g, bodyMat, baseColor, armL, armR,
+    group: g, bodyMat, baseColor, headMat, armL, armR,
     hp, maxHp: hp, speed, damage, attackCd: 0,
     hpBg: bg, hpFg: fg, radius: 0.65, flash: 0,
     wob: Math.random() * Math.PI * 2, isBoss: false,
-    type, scoreMult, spitCd: 1.5 + Math.random() * 1.5, core, id: ++ZID
+    type, scoreMult, spitCd: 1.5 + Math.random() * 1.5, core, id: ++ZID,
+    dashCd, dashT, leapCd, leapT, leapDur, leaping, leapFrom, leapTo, healCd
   });
   // gate pulse
   if (gateGlow) gateGlow.intensity = 5;
@@ -1548,12 +1711,21 @@ function checkUnlocks() {
 function fireWeapon(p) {
   p = p || player;
   if (!p || !p.alive || G.state === 'gameover' || G.state === 'menu') return;
-  const w = WEAPONS[p.weaponIndex];
+  const A = AW(p);
+  const w = A[p.weaponIndex];
+  if (!w) return;
   if (p.cool > 0) return;
   if (!w.unlocked) { if (p === player) switchWeapon(0); else if (isHost()) setPlayerWeapon(p, 0); return; }
   if (w.ammo <= 0) {
     if (p === player) { sfx.empty(); showMessage(`No ${w.name} ammo! Grab ◆ drops — switching to Pistol`, 1800); switchWeapon(0); }
     else if (isHost()) setPlayerWeapon(p, 0);
+    return;
+  }
+
+  // grenades charge while the trigger is held and throw on release
+  // (see updatePlayerOne) — nothing leaves the hand here.
+  if (w.kind === 'grenade') {
+    if (!p.charging) { p.charging = true; p.chargeT = 0; }
     return;
   }
 
@@ -1593,12 +1765,46 @@ function fireWeapon(p) {
     const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: w.color }));
     mesh.position.copy(start);
     scene.add(mesh);
-    bullets.push({ mesh, vel: v, life: w.range / w.bulletSpeed, damage: w.damage, kind: w.kind, blast: w.blast || 0, pierce: w.pierce || 0, hit: [], boom: false, wi: p.weaponIndex });
+    bullets.push({ mesh, vel: v, life: w.range / w.bulletSpeed, damage: w.damage, kind: w.kind, blast: w.blast || 0, pierce: w.pierce || 0, hit: [], boom: false, wi: p.weaponIndex, phaze: !!w.wallIgnore });
   }
   if (w.kind === 'gun' || w.kind === 'rocket') { p.flash.visible = true; p.flashT = 0.06; }
   if (p === player) {
     muzzleLight.position.copy(start); muzzleLight.intensity = 3;
     G.shake = Math.min(0.5, G.shake + (w.pellets > 2 ? 0.35 : 0.12));
+  }
+  updateWeaponHUD();
+}
+
+// Charged grenade throw: hold to charge (0–1.2s), release to lob in a
+// parabola — longer hold flies further (6–26 units), then it blows on landing.
+function throwGrenade(p, power) {
+  const A = AW(p);
+  const w = A[p.weaponIndex];
+  if (!w || w.kind !== 'grenade' || !w.unlocked) return;
+  if (p.cool > 0) return;
+  if (w.ammo <= 0) {
+    if (p === player) { sfx.empty(); showMessage(`No ${w.name} ammo! Grab ◆ drops — switching to Pistol`, 1800); switchWeapon(0); }
+    else if (isHost()) setPlayerWeapon(p, 0);
+    return;
+  }
+  power = Math.max(0.15, Math.min(1, power || 0.15));
+  p.cool = w.cooldown;
+  w.ammo--;
+  if (p === player) sfx.shoot(p.weaponIndex);
+  const dir = p.aim.clone(); dir.y = 0; dir.normalize();
+  const start = p.group.position.clone().add(dir.clone().multiplyScalar(1.0));
+  start.y = 1.2;
+  const spd = 8 + 16 * power, vy0 = 7 + 4 * power;
+  const v = new THREE.Vector3(dir.x * spd, 0, dir.z * spd);
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 8),
+    new THREE.MeshBasicMaterial({ color: w.color }));
+  mesh.position.copy(start);
+  scene.add(mesh);
+  bullets.push({ mesh, vel: v, vy: vy0, life: 4, damage: w.damage, kind: w.kind,
+    blast: w.blast || 0, pierce: 0, hit: [], boom: false, wi: p.weaponIndex, grav: 20 });
+  if (p === player) {
+    muzzleLight.position.copy(start); muzzleLight.intensity = 3;
+    G.shake = Math.min(0.5, G.shake + 0.2);
   }
   updateWeaponHUD();
 }
@@ -1725,6 +1931,7 @@ function startRound(n) {
     p.alive = true;
     p.hp = p.maxHp;
     p.hurtCd = 0;
+    p.charging = false; p.chargeT = 0;
     if (out) p.group.position.set((p.slot - 1.5) * 3, 0, 12);
   }
   G.isBossRound = (n % 10 === 0);
@@ -1754,10 +1961,12 @@ function startRound(n) {
   updateHUD();
 }
 function setPlayerWeapon(p, i) {
-  if (!p || !WEAPONS[i]) return;
+  if (!p || !AW(p)[i]) return;
   if (i === p.weaponIndex) return;
-  const sw = WEAPONS[i];
-  if (!sw.revealed || !sw.unlocked) return; // silent for remote requests
+  p.charging = false; p.chargeT = 0; // swapping cancels a grenade wind-up
+  const sw = AW(p)[i];
+  // reveals are team-wide (global), unlocks are personal (own arsenal)
+  if (!WEAPONS[i] || !WEAPONS[i].revealed || !sw.unlocked) return; // silent for remote requests
   p.weaponIndex = i;
   if (p === player) G.weaponIndex = i;
   if (p.gunMesh) p.group.remove(p.gunMesh);
@@ -1773,19 +1982,21 @@ function setPlayerWeapon(p, i) {
   }
 }
 function switchWeapon(i) {
-  const sw = WEAPONS[i];
-  if (!sw) return;
+  const base = WEAPONS[i];
+  if (!base) return;
   if (player && player.ghost) { showMessage('👻 Ghosts cannot use weapons — wait for rescue!', 1500); return; }
+  const mine = AW(player)[i];
+  const unlocked = mine ? mine.unlocked : base.unlocked;
   if (isNet() && !isHost()) {
     // guest: validate locally for feedback, host applies authoritatively
-    if (!sw.revealed) { showMessage(`🔒 ??? — keep hunting to reveal new weapons!`, 2000); sfx.locked(); return; }
-    if (!sw.unlocked) { showMessage(`${sw.icon} ${sw.name} costs $${WPRICE[i]} — open the shop (\`)!`, 2000); sfx.locked(); return; }
+    if (!base.revealed) { showMessage(`🔒 ??? — keep hunting to reveal new weapons!`, 2000); sfx.locked(); return; }
+    if (!unlocked) { showMessage(`${base.icon} ${base.name} costs $${WPRICE[i]} — open the shop (\`)!`, 2000); sfx.locked(); return; }
     NET.pendingWsel = i;
     setPlayerWeapon(player, i); // optimistic visual, snapshot confirms
     return;
   }
-  if (!sw.revealed) { showMessage(`🔒 ??? — keep hunting to reveal new weapons!`, 2000); sfx.locked(); return; }
-  if (!sw.unlocked) { showMessage(`${sw.icon} ${sw.name} costs $${WPRICE[i]} — open the shop (\`)!`, 2000); sfx.locked(); return; }
+  if (!base.revealed) { showMessage(`🔒 ??? — keep hunting to reveal new weapons!`, 2000); sfx.locked(); return; }
+  if (!unlocked) { showMessage(`${base.icon} ${base.name} costs $${WPRICE[i]} — open the shop (\`)!`, 2000); sfx.locked(); return; }
   setPlayerWeapon(player, i);
 }
 
@@ -1829,7 +2040,7 @@ function updateQuickHint() {
   const medEl = document.getElementById('qh-med');
   if (!ammoEl && !upEl && !medEl) return;
   const wi = (player ? player.weaponIndex : G.weaponIndex) || 0;
-  const w = WEAPONS[wi];
+  const w = AW(player)[wi];
   if (ammoEl) {
     if (!w || !w.unlocked || w.ammo === Infinity) ammoEl.textContent = '—';
     else if (w.ammo >= w.maxAmmo) ammoEl.textContent = 'FULL';
@@ -1849,12 +2060,13 @@ function updateQuickHint() {
   }
 }
 function updateWeaponHUD() {
-  WEAPONS.forEach((w, i) => {
+  const A = AW(player); // co-op: your own unlocks, levels and ammo
+  A.forEach((w, i) => {
     const el = document.getElementById('w-' + i);
     if (!el) return;
     el.classList.toggle('active', i === G.weaponIndex);
     el.classList.toggle('locked', !w.unlocked);
-    if (!w.revealed) { el.style.display = 'none'; return; }
+    if (!WEAPONS[i].revealed) { el.style.display = 'none'; return; }
     el.style.display = '';
     const nameEl = el.querySelector('.name');
     const ammoEl = el.querySelector('.ammo');
@@ -1881,17 +2093,20 @@ function updateWeaponHUD() {
       if (!m) return;
       const idx = parseInt(m[1], 10);
       try {
-        const w = WEAPONS[idx];
+        const A = AW(player);
+        const w = A[idx];
+        const base = WEAPONS[idx];
         // Revealed but not yet bought: click buys it (switching to it if it worked).
-        if (w && w.revealed && !w.unlocked) {
+        if (w && base && base.revealed && !w.unlocked) {
           if (viewMoney() < WPRICE[idx]) {
             showMessage(`${w.icon} ${w.name} costs $${WPRICE[idx]} — need $${WPRICE[idx] - viewMoney()} more!`, 1800);
             sfx.locked();
             return;
           }
           window.buyWeapon(idx); // guests: request is forwarded to the host
-          if (WEAPONS[idx].unlocked && !(player && player.ghost)) switchWeapon(idx);
-          else if (WEAPONS[idx].unlocked) showMessage(`${WEAPONS[idx].icon} ${WEAPONS[idx].name} purchased!`, 1500);
+          const cur = AW(player)[idx];
+          if (cur.unlocked && !(player && player.ghost)) switchWeapon(idx);
+          else if (cur.unlocked) showMessage(`${cur.icon} ${cur.name} purchased!`, 1500);
           else showMessage(`${w.icon} ${w.name} purchase sent!`, 1200);
           return;
         }
@@ -1903,6 +2118,7 @@ function updateWeaponHUD() {
 
 // ============ GAME CONTROL (exposed to menu buttons) ============
 function resetWeapons() {
+  // Global track (solo arsenal + team-wide reveals in co-op).
   WEAPONS.forEach((w) => {
     w.ammo = w.baseAmmo;
     w.unlocked = w.unlockKills === 0;
@@ -1910,6 +2126,8 @@ function resetWeapons() {
     w.up = 0;
     refreshWeapon(w);
   });
+  // Fresh personal arsenals for any existing net players.
+  for (const p of players) if (p && p.ars) p.ars = newArsenal();
 }
 window.startGame = function (mapKey, fromNet) {
   // debounce: card click + button click both fire (bubbling) — only start once
@@ -2050,7 +2268,7 @@ function statCard(name, sub, cost, maxed, fn, note) {
   // click outside the items window resumes the game
   shopEl.addEventListener('click', (e) => {
     if (!G.shopOpen) return;
-    if (e.target && e.target.closest && e.target.closest('#shop-items')) return;
+    if (e.target !== shopEl) return; // backdrop only: buttons/text stay put
     window.closeShop();
   });
 })();
@@ -2058,8 +2276,9 @@ function renderShop() {
   syncUnlocks();
   document.getElementById('shop-money').textContent = `💰 $${viewMoney()}${G.lives > 0 ? '  💖×' + G.lives : ''}`;
   let h = '<div class="shop-sec">WEAPONS — 12</div><div class="shop-grid">';
-  WEAPONS.forEach((w, i) => {
-    if (!w.revealed) {
+  const A = AW(player); // co-op: browse (and buy) your own arsenal
+  A.forEach((w, i) => {
+    if (!WEAPONS[i].revealed) {
       h += `<div class="sbox"><div class="sname">🔒 ???</div><div class="slevel">???</div><div class="sdesc">keep hunting to reveal</div><button disabled>???</button></div>`;
       return;
     }
@@ -2097,9 +2316,11 @@ function renderShop() {
 }
 window.buyWeapon = function (i) {
   if (isNet() && !isHost()) { netSend({ t: 'buy', what: 'weapon', a: i }); return; }
-  const w = WEAPONS[i];
   const bs = buyerSlot();
-  if (!w.revealed || w.unlocked || moneyOf(bs) < WPRICE[i]) return;
+  const A = isNet() ? players[bs].ars : WEAPONS;
+  if (!A) return;
+  const w = A[i];
+  if (!WEAPONS[i].revealed || w.unlocked || moneyOf(bs) < WPRICE[i]) return;
   addMoney(bs, -WPRICE[i]);
   w.unlocked = true;
   w.ammo = w.maxAmmo;
@@ -2108,9 +2329,11 @@ window.buyWeapon = function (i) {
 };
 window.buyAmmo = function (i) {
   if (isNet() && !isHost()) { netSend({ t: 'buy', what: 'ammo', a: i }); return; }
-  const w = WEAPONS[i];
-  const c = ammoCost(i);
   const bs = buyerSlot();
+  const A = isNet() ? players[bs].ars : WEAPONS;
+  if (!A) return;
+  const w = A[i];
+  const c = ammoCost(i, A);
   if (!w.unlocked || w.ammo === Infinity || w.ammo >= w.maxAmmo || moneyOf(bs) < c) return;
   addMoney(bs, -c);
   w.ammo = w.maxAmmo;
@@ -2119,13 +2342,15 @@ window.buyAmmo = function (i) {
 };
 window.buyUpgrade = function (i) {
   if (isNet() && !isHost()) { netSend({ t: 'buy', what: 'upgrade', a: i }); return; }
-  const w = WEAPONS[i];
+  const bs = buyerSlot();
+  const A = isNet() ? players[bs].ars : WEAPONS;
+  if (!A) return;
+  const w = A[i];
   if (!w || !w.unlocked) return;
   const up = w.up || 0;
   if (up >= UP_MAX) return;
   if (G.kills < upgradeNeedFor(i, up + 1)) return;
   const c = upgradeCost(w, i);
-  const bs = buyerSlot();
   if (moneyOf(bs) < c) return;
   addMoney(bs, -c);
   w.up = up + 1;
@@ -2147,7 +2372,7 @@ function buyAmmoCurrent() {
   if (typeof G === 'undefined' || (G.state !== 'playing' && G.state !== 'intermission')) return;
   const i = currentWeaponIndex();
   if (isNet() && !isHost()) { netSend({ t: 'buy', what: 'ammo', a: i }); return; }
-  const w = WEAPONS[i];
+  const w = AW(player)[i];
   if (!w || !w.unlocked) return;
   if (w.ammo === Infinity) { showMessage(`${w.icon} ${w.name} never needs ammo!`, 1200); return; }
   if (w.ammo >= w.maxAmmo) { showMessage(`${w.icon} ${w.name} ammo already full!`, 1200); return; }
@@ -2159,7 +2384,7 @@ function buyAmmoCurrent() {
 function buyUpgradeCurrent() {
   if (typeof G === 'undefined' || (G.state !== 'playing' && G.state !== 'intermission')) return;
   const i = currentWeaponIndex();
-  const w = WEAPONS[i];
+  const w = AW(player)[i];
   if (!w || !w.unlocked) return;
   if (isNet() && !isHost()) { netSend({ t: 'buy', what: 'upgrade', a: i }); return; }
   const up = w.up || 0;
@@ -2260,9 +2485,26 @@ function updateAim() {
       }
     }
   }
-  // crosshair follows mouse
+  // crosshair follows mouse (+ grenade charge ring while winding up)
   crosshair.style.left = mouseScreen.x + 'px';
   crosshair.style.top = mouseScreen.y + 'px';
+  try {
+    let ch = 0;
+    const gp = player && AW(player)[player.weaponIndex];
+    if (gp && gp.kind === 'grenade' && player.alive && !player.ghost &&
+        (G.state === 'playing' || G.state === 'intermission') &&
+        (keys['Space'] || G.mouseFireHeld)) {
+      if (simHost()) ch = (player.charging || player.chargeT > 0) ? Math.min(1, player.chargeT / 1.2) : 0;
+      else {
+        G.grenHold = Math.min(1.2, (G.grenHold || 0) + 0.016);
+        ch = G.grenHold / 1.2;
+      }
+    } else G.grenHold = 0;
+    const cs = 1 + ch * 1.2;
+    crosshair.style.width = (20 * cs) + 'px';
+    crosshair.style.height = (20 * cs) + 'px';
+    crosshair.style.borderColor = ch > 0 ? '#77ff44' : 'rgba(255,255,255,.9)';
+  } catch (e) {}
 }
 
 function playerInput(p) {
@@ -2297,6 +2539,19 @@ function updatePlayerOne(p, inp, dt) {
   if (p.hurtCd > 0) p.hurtCd -= dt;
   if (p.flashT > 0) { p.flashT -= dt; if (p.flashT <= 0) p.flash.visible = false; }
   if (p.cool > 0) p.cool -= dt;
+
+  // grenade charge: hold the trigger to wind up, release to lob
+  const cw = AW(p)[p.weaponIndex];
+  if (!ghost && cw && cw.kind === 'grenade') {
+    if (inp.fire) {
+      if (!p.charging) { p.charging = true; p.chargeT = 0; }
+      p.chargeT = Math.min(1.2, p.chargeT + dt);
+    } else if (p.charging) {
+      p.charging = false;
+      throwGrenade(p, Math.max(0.15, p.chargeT / 1.2));
+      p.chargeT = 0;
+    }
+  } else if (p.charging) { p.charging = false; p.chargeT = 0; }
 
   // host applies remote weapon requests
   if (isHost() && inp.wsel !== undefined && inp.wsel >= 0 && inp.wsel !== p.weaponIndex) setPlayerWeapon(p, inp.wsel);
@@ -2429,6 +2684,56 @@ function updateZombies(dt) {
         else if (dist < 11) advance = 0;
         if (z.spitCd <= 0 && dist < 28) { z.spitCd = 2.4 + Math.random(); spitAt(z, null, tgt); }
       }
+      // dasher: stalks, then explodes into a sprint
+      if (z.type === 'dasher') {
+        z.dashCd -= dt;
+        if (z.dashT > 0) { z.dashT -= dt; advance = 3; }
+        else if (z.dashCd <= 0) { z.dashCd = 2.5; z.dashT = 0.5; }
+        else advance = 0.5;
+      }
+      // leaper: crouches, then pounces clean over cover straight at you
+      if (z.type === 'leaper') {
+        z.leapCd -= dt;
+        if (z.leaping) {
+          z.leapT += dt;
+          const ph = Math.min(1, z.leapT / (z.leapDur || 0.55));
+          if (z.leapFrom && z.leapTo) {
+            zp.x = z.leapFrom.x + (z.leapTo.x - z.leapFrom.x) * ph;
+            zp.z = z.leapFrom.z + (z.leapTo.z - z.leapFrom.z) * ph;
+          }
+          z.group.position.y = Math.sin(ph * Math.PI) * 2.5;
+          if (ph >= 1) { z.leaping = false; z.group.position.y = 0; burst(zp.clone(), 0x2a9a8a, 0.6); }
+          advance = 0;
+        } else if (z.leapCd <= 0 && dist > 5 && dist < 20) {
+          z.leaping = true; z.leapT = 0; z.leapDur = 0.55;
+          z.leapCd = 4;
+          z.leapFrom = zp.clone();
+          z.leapTo = pp.clone();
+          sfx.blink();
+        }
+      }
+      // mender: channels a heal pulse for wounded zombies around it
+      if (z.type === 'mender') {
+        z.healCd -= dt;
+        if (z.healCd <= 0) {
+          z.healCd = 3;
+          let patched = false;
+          for (const o of zombies) {
+            if (o === z || o.hp >= o.maxHp) continue;
+            const dx = o.group.position.x - zp.x, dz = o.group.position.z - zp.z;
+            if (dx * dx + dz * dz < 36) { o.hp = Math.min(o.maxHp, o.hp + o.maxHp * 0.15); patched = true; }
+          }
+          if (patched) burst(zp.clone(), 0x66ff99, 0.9);
+        }
+      }
+      // shade: a ghost while far away, solid and fast once it closes in
+      if (z.type === 'shade' && z.bodyMat) {
+        const op = dist < 12 ? 0.9 : 0.18;
+        try {
+          z.bodyMat.opacity = op;
+          if (z.headMat) z.headMat.opacity = op;
+        } catch (e) {}
+      }
       if (dist > 0.001) {
         toP.normalize();
         // wobble for zombie feel
@@ -2438,11 +2743,11 @@ function updateZombies(dt) {
         zp.add(toP.clone().multiplyScalar(z.speed * advance * dt));
         zp.add(side.clone().multiplyScalar(dt));
         z.group.rotation.y = Math.atan2(toP.x, toP.z);
-        // zombie walk bob
-        z.group.position.y = Math.abs(Math.sin(z.wob * 2)) * 0.08;
+        // zombie walk bob (leapers own their arc mid-pounce)
+        if (!z.leaping) z.group.position.y = Math.abs(Math.sin(z.wob * 2)) * 0.08;
       }
       clampToArena(zp, z.radius);
-      resolveObstacles(zp, z.radius);
+      if (!z.leaping) resolveObstacles(zp, z.radius); // pounces sail over cover
 
       // bomber detonates instead of melee (hurts player + chain-hits zombies)
       if (z.type === 'bomber' && dist < 1.8) {
@@ -2522,7 +2827,18 @@ function updateBullets(dt) {
       if (explosive) detonate(b);
       dead = true;
     }
-    if (!dead && pointHitsObstacle(p.x, p.z)) {
+    // thrown grenades arc through the air and blow up where they land
+    if (!dead && b.grav) {
+      b.vy -= b.grav * dt;
+      p.y += b.vy * dt;
+      if (p.y <= 0.15) {
+        p.y = 0.15;
+        if (explosive) detonate(b);
+        dead = true;
+      }
+    }
+    // railgun slugs ignore walls; everything else stops at cover
+    if (!dead && !b.phaze && pointHitsObstacle(p.x, p.z)) {
       if (explosive) detonate(b);
       dead = true;
     }
@@ -2578,6 +2894,11 @@ function killZombie(index) {
   if (z.type === 'bomber' && !wasBoss) {
     explode(pos, 3.2, Math.round(22 + G.round * 2), { hurtPlayer: true, hurtZombies: true, color: 0xff5522, size: 1.4 });
   }
+  // splitter pops into two speeders (capped so the arena never floods)
+  if (z.type === 'splitter' && !wasBoss && zombies.length < 22) {
+    for (let m = 0; m < 2; m++) spawnZombie('speeder', pos);
+    showMessage('🫧 The splitter burst apart!', 1500);
+  }
   if (wasBoss) {
     spawnCoins(pos, 200 + G.round * 20);
     showMessage(`👹 BOSS SLAIN! +${pts} pts — grab the coins!`, 3000);
@@ -2607,8 +2928,9 @@ function explode(pos, radius, damage, opts) {
         z.hp -= damage;
         z.flash = 0.15;
         const _dd = Math.sqrt(dx * dx + dz * dz) || 0.001;
+        // shove AWAY from the blast (towards the zombie, out from ground zero)
         const _push = ((opts.power || 2.5) * (1 - _dd / rr) + 0.5) * (z.isBoss ? BOSS_DEF[z.bossKind || 0].resist : 1);
-        zp.x += dx / _dd * _push; zp.z += dz / _dd * _push;
+        zp.x -= dx / _dd * _push; zp.z -= dz / _dd * _push;
         clampToArena(zp, z.radius); resolveObstacles(zp, z.radius);
         if (z.hp <= 0) killZombie(j);
       }
@@ -2742,7 +3064,7 @@ function makeGhost(tgt) {
   if (!tgt || tgt.ghost) return;
   const pos = tgt.group.position.clone();
   tgt.alive = false; tgt.ghost = true; tgt.hp = 0;
-  tgt.cool = 0; tgt.hurtCd = 0;
+  tgt.cool = 0; tgt.hurtCd = 0; tgt.charging = false; tgt.chargeT = 0;
   if (tgt.flash) tgt.flash.visible = false;
   setGhostAppearance(tgt, true);
   try { removeCorpse(tgt); } catch (e) {}
@@ -2762,7 +3084,7 @@ function revivePlayer(tgt) {
   try { removeCorpse(tgt); } catch (e) {}
   tgt.corpsePos = null;
   tgt.ghost = false; tgt.alive = true;
-  tgt.hp = tgt.maxHp; tgt.hurtCd = 3; tgt.cool = 0;
+  tgt.hp = tgt.maxHp; tgt.hurtCd = 3; tgt.cool = 0; tgt.charging = false; tgt.chargeT = 0;
   setGhostAppearance(tgt, false);
   burst(tgt.group.position.clone(), 0x66ff99, 1.2);
   updateHUD();
@@ -2898,11 +3220,35 @@ function spitAt(z, opts, tgt) {
   beep(300, 0.15, 'sawtooth', 0.08, 150);
 }
 // Which zombie breed spawns: new powers join the pool every 10 rounds.
+// Which zombie breed spawns: trickier breeds join as rounds climb —
+// spitters (7), dashers (10), bombers (14), leapers (16), speeders (21),
+// splitters (22), menders (28), shades (34).
 function pickZombieType() {
   const r = G.round, roll = Math.random();
-  if (r >= 21) { if (roll < 0.15) return 'speeder'; if (roll < 0.30) return 'bomber'; if (roll < 0.50) return 'spitter'; }
-  else if (r >= 14) { if (roll < 0.15) return 'bomber'; if (roll < 0.35) return 'spitter'; }
-  else if (r >= 7) { if (roll < 0.20) return 'spitter'; }
+  if (r >= 34) {
+    if (roll < 0.10) return 'shade'; if (roll < 0.20) return 'mender';
+    if (roll < 0.32) return 'splitter'; if (roll < 0.42) return 'leaper';
+    if (roll < 0.50) return 'dasher'; if (roll < 0.60) return 'speeder';
+    if (roll < 0.70) return 'bomber'; if (roll < 0.85) return 'spitter';
+  } else if (r >= 28) {
+    if (roll < 0.10) return 'mender'; if (roll < 0.22) return 'splitter';
+    if (roll < 0.32) return 'leaper'; if (roll < 0.42) return 'dasher';
+    if (roll < 0.54) return 'speeder'; if (roll < 0.66) return 'bomber';
+    if (roll < 0.81) return 'spitter';
+  } else if (r >= 22) {
+    if (roll < 0.12) return 'splitter'; if (roll < 0.24) return 'leaper';
+    if (roll < 0.34) return 'dasher'; if (roll < 0.48) return 'speeder';
+    if (roll < 0.60) return 'bomber'; if (roll < 0.76) return 'spitter';
+  } else if (r >= 16) {
+    if (roll < 0.12) return 'leaper'; if (roll < 0.24) return 'dasher';
+    if (roll < 0.36) return 'speeder'; if (roll < 0.48) return 'bomber';
+    if (roll < 0.66) return 'spitter';
+  } else if (r >= 14) {
+    if (roll < 0.14) return 'dasher'; if (roll < 0.28) return 'bomber';
+    if (roll < 0.48) return 'spitter';
+  } else if (r >= 10) {
+    if (roll < 0.14) return 'dasher'; if (roll < 0.34) return 'spitter';
+  } else if (r >= 7) { if (roll < 0.20) return 'spitter'; }
   return 'normal';
 }
 // tiny particle bursts
