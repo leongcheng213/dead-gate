@@ -658,7 +658,7 @@ function handleNetEv(e) {
     } else if (kind === 'msg') {
       try { showMessage(e.text || '', 2500); } catch (err) {}
     } else if (kind === 'clear') {
-      try { showBanner(`ROUND ${e.n} CLEAR!`, 2000); showMessage(`+${e.bonus || 0} bonus • +$${e.cash || 0} cash • spend it in the shop (\`)!`, 4000); sfx.pickup(); updateHUD(); } catch (err) {}
+      try { showBanner(`ROUND ${e.n} CLEAR!`, 2000); showMessage(`+${e.bonus || 0} bonus • +$${e.cash || 0} cash • heal with E / shop (\`)!`, 4000); sfx.pickup(); updateHUD(); } catch (err) {}
     } else if (kind === 'over') {
       try { teamGameOver(); } catch (err) {}
     }
@@ -1929,7 +1929,8 @@ function startRound(n) {
     p.ghost = false;
     try { setGhostAppearance(p, false); } catch (e) {}
     p.alive = true;
-    p.hp = p.maxHp;
+    // No free heal: HP carries into the next round untouched in every mode.
+    // Top up with First Aid (E / shop) before the wave hits.
     p.hurtCd = 0;
     p.charging = false; p.chargeT = 0;
     if (out) p.group.position.set((p.slot - 1.5) * 3, 0, 12);
@@ -2804,7 +2805,7 @@ function updateZombies(dt) {
     if (!isNet()) G.money += cash;
     else for (const p of players) if (p) addMoney(p.slot, cash);
     showBanner(`ROUND ${G.round} CLEAR!`, 2000);
-    showMessage(`+${bonus} bonus • +$${cash} cash • spend it in the shop (\`)! Next wave in 5s…`, 4000);
+    showMessage(`+${bonus} bonus • +$${cash} cash • heal with E / shop (\`)! Next wave in 5s…`, 4000);
     if (isHost()) netEv({ kind: 'clear', n: G.round, bonus, cash });
     sfx.pickup();
     updateHUD();
