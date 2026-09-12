@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DEAD GATE — Zombie Hunting</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#050505; font-family:'Segoe UI', Arial, sans-serif; color:#eee; }
+  #game-canvas { position:fixed; inset:0; display:block; }
+  .overlay { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; z-index:10; }
+  /* MENU */
+  #menu { background: radial-gradient(ellipse at center, rgba(60,0,0,.88), rgba(0,0,0,.96)), url(''); backdrop-filter: blur(2px); }
+  #menu h1 { font-size:64px; letter-spacing:6px; color:#ff2222; text-shadow:0 0 20px #ff0000, 0 0 60px #770000; font-weight:900; }
+  #menu h1 span { color:#fff; }
+  #menu p.sub { margin:8px 0 24px; color:#aaa; letter-spacing:2px; }
+  .maps { display:flex; gap:20px; margin-bottom:24px; flex-wrap:wrap; justify-content:center; }
+  .map-card { width:240px; background:#111; border:2px solid #333; border-radius:12px; padding:16px; cursor:pointer; transition:.2s; text-align:center; }
+  .map-card:hover { border-color:#ff2222; transform:translateY(-4px); box-shadow:0 0 24px rgba(255,0,0,.35); }
+  .map-card .preview { height:110px; border-radius:8px; margin-bottom:12px; display:flex; align-items:flex-end; justify-content:center; padding-bottom:8px; font-weight:800; letter-spacing:1px; }
+  .map-card h3 { margin-bottom:6px; }
+  .map-card p { font-size:13px; color:#aaa; line-height:1.4; min-height:54px; }
+  .map-card button { margin-top:10px; width:100%; padding:10px; background:#ff2222; border:none; border-radius:6px; color:#fff; font-weight:800; letter-spacing:1px; cursor:pointer; }
+  .map-card button:hover { background:#cc0000; }
+  #controls-help { background:#0d0d0d; border:1px solid #222; border-radius:8px; padding:12px 20px; font-size:14px; color:#ccc; line-height:1.8; text-align:center; max-width:860px; }
+  #controls-help b { color:#fff; background:#222; padding:2px 8px; border-radius:4px; border:1px solid #444; margin:0 2px; }
+  #load-status { display:none; margin-bottom:16px; background:#2a1000; border:1px solid #aa5500; color:#ffcc66; border-radius:8px; padding:10px 18px; font-size:14px; font-weight:700; max-width:640px; text-align:center; }
+  /* HUD */
+  #hud { position:fixed; inset:0; pointer-events:none; z-index:5; display:none; }
+  #topbar { position:absolute; top:0; left:0; right:0; display:flex; justify-content:center; gap:18px; padding:12px; }
+  .pill { background:rgba(0,0,0,.65); border:1px solid #333; border-radius:20px; padding:8px 18px; font-weight:700; font-size:15px; }
+  .pill.red { border-color:#ff2222; color:#ff5555; }
+  .pill.green { border-color:#22aa44; color:#66ff99; }
+  .pill.gold { border-color:#aa8822; color:#ffdd66; }
+  #health-wrap { position:absolute; left:20px; bottom:20px; width:280px; background:rgba(0,0,0,.65); border:1px solid #333; border-radius:10px; padding:12px; }
+  #health-wrap label { font-size:12px; letter-spacing:2px; color:#aaa; }
+  #health-bar-outer { height:18px; background:#221111; border-radius:9px; overflow:hidden; margin-top:6px; border:1px solid #551111; }
+  #health-bar { height:100%; width:100%; background:linear-gradient(90deg,#ff2222,#ff6666); transition:width .2s; }
+  #weapons { position:absolute; right:20px; bottom:20px; display:flex; gap:8px; flex-wrap:wrap; max-width:480px; justify-content:flex-end; pointer-events:auto; }
+  .wslot { width:76px; background:rgba(0,0,0,.65); border:2px solid #333; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; }
+  .wslot.active { border-color:#ffdd00; box-shadow:0 0 14px rgba(255,221,0,.4); }
+  .wslot.locked { opacity:.55; border-style:dashed; }
+  .wslot .num { font-size:10px; color:#888; }
+  .wslot .name { font-weight:800; font-size:11px; }
+  .wslot .ammo { font-size:12px; color:#ffdd66; }
+  .wslot.locked .ammo { color:#ff8866; }
+  #crosshair { position:absolute; width:20px; height:20px; border:2px solid rgba(255,255,255,.9); border-radius:50%; transform:translate(-50%,-50%); pointer-events:none; display:none; }
+  #crosshair::after { content:''; position:absolute; left:50%; top:50%; width:4px; height:4px; background:#ff2222; border-radius:50%; transform:translate(-50%,-50%); }
+  #round-banner { position:fixed; top:32%; left:0; right:0; text-align:center; font-size:64px; font-weight:900; letter-spacing:8px; color:#ff2222; text-shadow:0 0 30px #ff0000; z-index:6; display:none; pointer-events:none; }
+  #message { position:fixed; bottom:110px; left:0; right:0; text-align:center; color:#ffdd66; font-weight:700; z-index:6; pointer-events:none; text-shadow:0 2px 6px #000; }
+  #quick-hint { position:fixed; bottom:22px; left:50%; transform:translateX(-50%); z-index:5; pointer-events:none; background:rgba(0,0,0,.55); border:1px solid #333; border-radius:16px; padding:6px 16px; font-size:13px; color:#ffdd66; font-weight:700; display:none; white-space:nowrap; }
+  #quick-hint b { color:#fff; background:#222; padding:1px 7px; border-radius:4px; border:1px solid #444; margin:0 2px; }
+  #quick-hint .pr { display:inline-block; text-align:left; font-variant-numeric:tabular-nums; color:#fff; }
+  #qh-ammo { min-width:5ch; }
+  #qh-up { min-width:6ch; }
+  #qh-med { min-width:5ch; }
+  #damage-vignette { position:fixed; inset:0; pointer-events:none; z-index:4; box-shadow:inset 0 0 120px rgba(255,0,0,0); transition:box-shadow .2s; }
+  #lowhp { position:fixed; inset:0; pointer-events:none; z-index:4; background:radial-gradient(ellipse at center, transparent 52%, rgba(255,0,0,.28) 78%, rgba(255,0,0,.62) 100%); opacity:0; }
+  #lowhp.on { animation:lowpulse 1s ease-in-out infinite; }
+  @keyframes lowpulse { 0%,100% { opacity:.3; } 50% { opacity:.75; } }
+  /* GAME OVER */
+  #gameover { background:rgba(0,0,0,.88); display:none; }
+  #gameover h2 { font-size:56px; color:#ff2222; letter-spacing:4px; }
+  #gameover .stats { margin:18px 0; font-size:18px; line-height:2; text-align:center; background:#111; padding:18px 40px; border-radius:12px; border:1px solid #333; }
+  #gameover button { padding:14px 40px; font-size:18px; font-weight:800; background:#ff2222; color:#fff; border:none; border-radius:8px; cursor:pointer; margin:6px; }
+  #gameover button.secondary { background:#333; }
+  /* MULTIPLAYER */
+  #mode-tabs { display:flex; gap:10px; margin:4px 0 14px; }
+  #mode-tabs button { padding:10px 26px; font-weight:800; letter-spacing:1px; background:#1a1a1a; color:#888; border:2px solid #333; border-radius:8px; cursor:pointer; }
+  #mode-tabs button.active { background:#ff2222; color:#fff; border-color:#ff2222; }
+  #multi-box { width:min(640px,94vw); background:#0d0d0d; border:1px solid #333; border-radius:12px; padding:18px 22px; margin-top:18px; text-align:center; }
+  #multi-box h2 { font-size:22px; letter-spacing:2px; margin-bottom:4px; }
+  #multi-box .small { color:#888; font-size:12px; }
+  #net-setup { display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin:12px 0; align-items:center; }
+  #net-setup input { padding:10px; border-radius:6px; border:1px solid #444; background:#111; color:#fff; width:130px; text-align:center; }
+  #net-setup button, #net-lobby button { padding:10px 18px; font-weight:800; background:#ff2222; color:#fff; border:none; border-radius:6px; cursor:pointer; }
+  #net-setup button:hover, #net-lobby button:hover { background:#cc0000; }
+  #net-lobby button.secondary { background:#333; }
+  #net-roomcode { font-size:34px; letter-spacing:10px; color:#ffdd66; font-weight:900; }
+  #net-roster { list-style:none; margin:10px 0; font-size:15px; line-height:1.9; padding:0; }
+  #net-status { min-height:20px; color:#ff8866; font-size:13px; margin-top:8px; }
+  #net-maprow { margin-top:8px; color:#aaa; font-size:14px; }
+  #net-maprow button { padding:6px 12px; margin:2px; background:#222; color:#ccc; border:1px solid #444; border-radius:6px; cursor:pointer; font-size:16px; }
+  #net-maprow button.sel { border-color:#ffdd00; color:#ffdd00; }
+  #host-shop-veil { position:fixed; top:70px; left:0; right:0; text-align:center; z-index:6; pointer-events:none; color:#ffdd66; font-weight:800; display:none; text-shadow:0 2px 6px #000; }
+  #shop { background:rgba(0,0,0,.82); display:none; }
+  #shop h2 { font-size:44px; color:#ffdd66; letter-spacing:4px; text-shadow:0 0 24px #aa7700; }
+  #shop-money { font-size:22px; font-weight:800; color:#ffdd66; margin:6px 0 10px; }
+  #shop { justify-content:safe center; overflow-y:auto; }
+  #shop-items { width:min(660px,94vw); max-height:52vh; overflow-y:auto; background:#0d0d0d; border:1px solid #333; border-radius:10px; padding:10px 14px; margin-bottom:14px; text-align:left; }
+  .shop-sec { font-size:12px; letter-spacing:2px; color:#888; margin:10px 0 4px; }
+  .sbox { background:#141414; border:1px solid #333; border-radius:8px; padding:8px; text-align:center; font-size:13px; }
+  .sbox .sname { font-weight:800; font-size:14px; }
+  .sbox .slevel { color:#ffdd66; font-size:12px; margin:2px 0; }
+  .sbox .sdesc { color:#888; font-size:11px; min-height:28px; }
+  .sbox button { display:block; width:100%; margin-top:5px; padding:5px 4px; font-weight:800; background:#ffdd00; color:#111; border:none; border-radius:6px; cursor:pointer; font-size:11px; }
+  .sbox button:last-child { margin-right:0; }
+  .sbox button:disabled { background:#333; color:#777; cursor:default; }
+  .sbox button svg { width:13px; height:13px; vertical-align:-2px; }
+  .shop-sec { font-size:12px; letter-spacing:2px; color:#888; margin:10px 0 6px; }
+  #shop > div:last-child { display:none; }
+  .shop-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+  .supply-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .stat-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  #resume-hint { min-height:54px; background:#0d0d0d; border:1px solid #333; border-radius:8px; padding:7px 12px; margin-top:10px; font-size:13px; color:#ffdd66; text-align:left; width:min(660px,94vw); box-sizing:border-box; }
+  #pause { background:rgba(0,0,0,.72); display:none; }
+  #esc-menu { background:rgba(0,0,0,.55); display:none; }
+  #pause h2 { font-size:52px; color:#ffdd66; letter-spacing:6px; text-shadow:0 0 24px #aa7700; }
+  #esc-menu h2 { font-size:44px; color:#fff; letter-spacing:6px; text-shadow:0 0 24px #4444aa; }
+  #pause p, #esc-menu p { margin:10px 0 18px; color:#aaa; letter-spacing:1px; }
+  #pause button, #esc-menu button { padding:14px 44px; font-size:18px; font-weight:800; background:#ffdd00; color:#111; border:none; border-radius:8px; cursor:pointer; margin:6px; }
+  #pause button.secondary, #esc-menu button.secondary { background:#333; color:#fff; }
+</style>
+<script src="./three.min.js"></script>
+<script>if(!window.THREE){document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"><\/script>');}</script>
+<script>if(!window.THREE){document.write('<script src="https://unpkg.com/three@0.149.0/build/three.min.js"><\/script>');}</script>
+</head>
+<body>
+<canvas id="game-canvas"></canvas>
+<div id="damage-vignette"></div>
+<div id="lowhp"></div>
+
+<div id="hud">
+  <div id="topbar">
+    <div class="pill red" id="hud-round">ROUND 1</div>
+    <div class="pill" id="hud-zombies">🧟 0 left</div>
+    <div class="pill gold" id="hud-score">SCORE 0</div>
+    <div class="pill green" id="hud-kills">KILLS 0</div>
+    <div class="pill gold" id="hud-money">$0</div>
+    <div class="pill" id="hud-map">MAP</div>
+  </div>
+  <div id="health-wrap">
+    <label>❤ HEALTH <span id="hud-lives"></span></label>
+    <div id="health-bar-outer"><div id="health-bar"></div></div>
+    <div id="pickup-log" style="margin-top:8px;font-size:13px;color:#8f8;"></div>
+  </div>
+  <div id="weapons">
+    <div class="wslot" id="w-0"><div class="num">[1]</div><div class="name">🔫 Pistol</div><div class="ammo">∞</div></div>
+    <div class="wslot" id="w-1"><div class="num">[2]</div><div class="name">🔒 Rifle</div><div class="ammo">8 kills</div></div>
+    <div class="wslot" id="w-2"><div class="num">[3]</div><div class="name">🔒 Shotgun</div><div class="ammo">20 kills</div></div>
+    <div class="wslot" id="w-3"><div class="num">[4]</div><div class="name">🔒 SMG</div><div class="ammo">35 kills</div></div>
+    <div class="wslot" id="w-4"><div class="num">[5]</div><div class="name">🔒 Sniper</div><div class="ammo">55 kills</div></div>
+    <div class="wslot" id="w-5"><div class="num">[6]</div><div class="name">🔒 Crossbow</div><div class="ammo">80 kills</div></div>
+    <div class="wslot" id="w-6"><div class="num">[7]</div><div class="name">🔒 Minigun</div><div class="ammo">110 kills</div></div>
+    <div class="wslot" id="w-7"><div class="num">[8]</div><div class="name">🔒 Grenade</div><div class="ammo">150 kills</div></div>
+    <div class="wslot" id="w-8"><div class="num">[9]</div><div class="name">🔒 Rocket</div><div class="ammo">200 kills</div></div>
+    <div class="wslot" id="w-9"><div class="num">[0]</div><div class="name">🔒 Mine</div><div class="ammo">???</div></div>
+    <div class="wslot" id="w-10"><div class="num">[-]</div><div class="name">🔒 Plasma</div><div class="ammo">???</div></div>
+    <div class="wslot" id="w-11"><div class="num">[=]</div><div class="name">🔒 Bane</div><div class="ammo">???</div></div>
+  </div>
+  <div id="crosshair"></div>
+</div>
+
+<div id="round-banner"></div>
+<div id="message"></div>
+<div id="quick-hint"><b>`</b> shop &nbsp;•&nbsp; <b>R</b> buy ammo <span class="pr" id="qh-ammo">—</span> &nbsp;•&nbsp; <b>Q</b> upgrade weapon <span class="pr" id="qh-up">—</span> &nbsp;•&nbsp; <b>E</b> cure <span class="pr" id="qh-med">—</span> &nbsp;•&nbsp; <b>T</b> revive mate</div>
+
+<div id="menu" class="overlay">
+  <h1>DEAD <span>GATE</span></h1>
+  <p class="sub">ZOMBIE HUNTING • 1 PLAYER • THEY COME FROM THE GATE</p>
+  <div id="mode-tabs">
+    <button id="tab-solo" class="active" onclick="window.setMode('solo')">1 PLAYER</button>
+    <button id="tab-multi" onclick="window.setMode('multi')">👥 MULTIPLAYER</button>
+  </div>
+  <div id="load-status"></div>
+  <div class="maps">
+    <div class="map-card" data-map="graveyard">
+      <div class="preview" style="background:linear-gradient(#1a2b1a,#0d1a0d);border:1px solid #2d5a2d;color:#7f7;">🪦 🪦 🪦<br>GATE ⬆</div>
+      <h3>🪦 Graveyard</h3>
+      <p>Foggy cemetery. Tombstones block bullets. Slow zombies. Best for beginners.</p>
+      <button onclick="window.startGame('graveyard')">PLAY GRAVEYARD</button>
+    </div>
+    <div class="map-card" data-map="city">
+      <div class="preview" style="background:linear-gradient(#2b2b33,#111116);border:1px solid #555;color:#aaa;">🏢 🏚 🏢<br>GATE ⬆</div>
+      <h3>🏢 City Ruins</h3>
+      <p>Abandoned streets. Buildings = tight cover. Balanced speed & damage. Classic hunt.</p>
+      <button onclick="window.startGame('city')">PLAY CITY</button>
+    </div>
+    <div class="map-card" data-map="desert">
+      <div class="preview" style="background:linear-gradient(#5a4a2a,#2a2010);border:1px solid #aa8822;color:#ffdd66;">🌵 ☀️ 🌵<br>GATE ⬆</div>
+      <h3>🌵 Desert Outpost</h3>
+      <p>Open sand, few rocks. Nowhere to hide. Fast zombies, high score. Hard mode.</p>
+      <button onclick="window.startGame('desert')">PLAY DESERT</button>
+    </div>
+  </div>
+  <div id="controls-help">
+    <b>W</b><b>A</b><b>S</b><b>D</b> move &nbsp; • &nbsp; <b>MOUSE</b> aim &nbsp; • &nbsp; <b>SPACE</b> / click shoot &nbsp; • &nbsp; <b>1</b>-<b>=</b> / wheel / click boxes change weapon &nbsp; • &nbsp; <b>R</b> buy ammo &nbsp; • &nbsp; <b>Q</b> upgrade weapon &nbsp; • &nbsp; <b>E</b> buy First Aid &nbsp; • &nbsp; <b>T</b> revive teammate (co-op) &nbsp; • &nbsp; <b>`</b> shop &nbsp; • &nbsp; <b>ESC</b> pause / menu
+    <br>Press <b>`</b> any time during the hunt to open the shop window — weapons, ammo, upgrades, stats, aid and extra life are all in there.
+    <br><b>12 weapons</b>: Pistol, Rifle, Shotgun, SMG, Sniper, Crossbow, Minigun, 💣 Grenade, 🚀 Rocket, ⚫ Mine, 🔮 Plasma, ☠️ Bane — kills reveal them in the shop, cash buys them (+ammo, single combined upgrade to Lv15, ✚ aid, 💖 life)
+    <br>Zombies drop <b style="color:#ffdd66">$ coins</b> • buy stats (❤ max HP, 🛡 defense, 👟 speed), aid, 💖 life • upgrade each weapon with ONE button to Lv15 (damage + rate + mag every level, pierce/blast every 3) • ⚠️ explosives hurt YOU too • <b>👹 Boss every 10 rounds</b> — Brute, Spitter, Blink, Wraith, Summoner, then combos! • new zombie powers every 7 rounds
+  </div>
+
+  <div id="multi-box" style="display:none">
+    <h2>👥 MULTIPLAYER <span class="small">up to 4 hunters • zombies get tougher</span></h2>
+    <p class="small" style="margin:6px 0;line-height:1.7;">🤝 Teammate bullets can't hurt you — but 💣🚀 explosions can, watch your spacing!<br>🛒 The shop does <b>not</b> pause the hunt in co-op — buy carefully, zombies keep coming. <b>ESC</b> opens the menu (no pause) — leave the room there if needed.<br>💰 Coins are personal: whoever grabs one keeps it (drops grow ~1.5× with 2 hunters). HP carries between rounds — the fallen stay fallen, top up with <b>E</b>.<br>👻 Death leaves a 👻 ghost + red-arrow body: a mate buys 💉 <b>Revive Kit</b>, walks to the body and presses <b>T</b>. No self-rebirth here!</p>
+    <div id="net-setup">
+      <input id="net-name" maxlength="12" value="Hunter" />
+      <input id="net-server" placeholder="HOST:PORT" />
+      <button onclick="window.netCreate()">CREATE</button>
+      <input id="net-code" maxlength="4" placeholder="CODE" style="width:80px" />
+      <button onclick="window.netJoin()">JOIN</button>
+    </div>
+    <div id="net-lobby" style="display:none">
+      <div>ROOM <span id="net-roomcode">----</span> <span id="net-hostbadge"></span></div>
+      <ol id="net-roster"></ol>
+      <div id="net-maprow">MAP:
+        <button data-map="graveyard" class="sel" onclick="window.netMap('graveyard')">🪦</button>
+        <button data-map="city" onclick="window.netMap('city')">🏢</button>
+        <button data-map="desert" onclick="window.netMap('desert')">🌵</button>
+      </div>
+      <div style="margin-top:10px">
+        <button id="net-start" onclick="window.netStart()">START HUNT</button>
+        <button class="secondary" onclick="window.netLeave()">LEAVE</button>
+      </div>
+    </div>
+    <div id="net-status"></div>
+    <p class="small">Host: run <b>python server.py 8901</b> in the game folder.<br>Friends open <b>http://YOUR-PC-IP:8901/</b> — same Wi-Fi just works.</p>
+  </div>
+</div>
+
+<div id="pause" class="overlay">
+  <h2>⏸ PAUSED</h2>
+  <p>Take a breath. The horde waits.</p>
+  <div>
+    <button onclick="window.resumeGame()">RESUME</button>
+    <button class="secondary" onclick="window.exitToMenu()">EXIT TO MENU</button>
+  </div>
+</div>
+
+<div id="esc-menu" class="overlay">
+  <h2>MENU</h2>
+  <p>The hunt goes on while this is open — find cover first!</p>
+  <div>
+    <button onclick="window.closeEscMenu()">RESUME</button>
+    <button class="secondary" onclick="window.leaveRoomToMenu()">LEAVE ROOM</button>
+  </div>
+</div>
+
+<div id="shop" class="overlay">
+  <h2>🛒 SHOP</h2>
+  <div id="shop-money">💰 $0</div>
+  <div id="shop-items"></div>
+  <div id="resume-hint">Press ` or ESC to resume</div>
+</div>
+
+<div id="host-shop-veil">🛒 Host is shopping…</div>
+
+<div id="gameover" class="overlay">
+  <h2>☠ YOU DIED ☠</h2>
+  <div class="stats" id="final-stats"></div>
+  <div>
+    <button onclick="window.restartToMenu()">CHANGE MAP</button>
+    <button class="secondary" onclick="window.retrySameMap()">RETRY</button>
+  </div>
+</div>
+
+<script src="./models/ammo-icon.js"></script>
+<script src="./main.js"></script>
+<script>
+// Menu wiring that works even if main.js fails to load: clicking anywhere on a
+// card starts that map, and failures show a message instead of dead buttons.
+(function () {
+  var statusEl = document.getElementById('load-status');
+  function setStatus(t) {
+    if (!statusEl) return;
+    statusEl.textContent = t;
+    statusEl.style.display = t ? 'block' : 'none';
+  }
+  window.__setLoadStatus = setStatus;
+  if (!window.THREE) {
+    setStatus('⚠ Could not load the 3D engine. Connect to the internet and reload the page.');
+  } else if (!window.__gameBooted) {
+    setStatus('⚠ Game script failed to start. Try reloading, or press F12 and check the console.');
+  }
+  document.querySelectorAll('.map-card').forEach(function (card) {
+    card.addEventListener('click', function () {
+      var m = card.getAttribute('data-map');
+      if (window.startGame) { try { window.startGame(m); } catch (e) { setStatus('⚠ Failed to start: ' + e.message); } }
+      else { window.__wantedMap = m; setStatus('Loading… please wait a moment, then click again.'); }
+    });
+  });
+})();
+</script>
+<script>
+// ---- multiplayer lobby UI (game + protocol live in main.js) ----
+(function () {
+  function $(id) { return document.getElementById(id); }
+  window.setMode = function (m) {
+    var solo = (m === 'solo');
+    var el;
+    el = $('tab-solo'); if (el) el.classList.toggle('active', solo);
+    el = $('tab-multi'); if (el) el.classList.toggle('active', !solo);
+    el = document.querySelector('#menu .maps'); if (el) el.style.display = solo ? '' : 'none';
+    el = $('controls-help'); if (el) el.style.display = solo ? '' : 'none';
+    el = $('multi-box'); if (el) el.style.display = solo ? 'none' : 'block';
+    const srv = $('net-server');
+    if (srv && !srv.value) {
+      if (/^https?:/.test(location.protocol)) srv.value = location.host;
+      else srv.placeholder = 'HOST:PORT (run server.py)';
+    }
+  };
+  window.netStatus = function (t) { const el = $('net-status'); if (el) el.textContent = t || ''; };
+})();
+</script>
+</body>
+</html>

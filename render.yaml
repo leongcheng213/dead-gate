@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: dead-gate
+    runtime: python
+    plan: free
+    startCommand: python server.py $PORT
+    healthCheckPath: /
