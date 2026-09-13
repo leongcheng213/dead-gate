@@ -82,6 +82,12 @@
   #net-maprow { margin-top:8px; color:#aaa; font-size:14px; }
   #net-maprow button { padding:6px 12px; margin:2px; background:#222; color:#ccc; border:1px solid #444; border-radius:6px; cursor:pointer; font-size:16px; }
   #net-maprow button.sel { border-color:#ffdd00; color:#ffdd00; }
+  #net-diffrow { margin-top:8px; color:#aaa; font-size:14px; }
+  #net-diffrow button { padding:6px 12px; margin:2px; background:#222; color:#ccc; border:1px solid #444; border-radius:6px; cursor:pointer; font-size:13px; font-weight:800; }
+  #net-diffrow button.sel { border-color:#ffdd00; color:#ffdd00; }
+  #diff-row { display:flex; gap:10px; margin:2px 0 14px; align-items:center; color:#aaa; font-size:14px; letter-spacing:1px; }
+  #diff-row button { padding:10px 22px; font-weight:800; letter-spacing:1px; background:#1a1a1a; color:#888; border:2px solid #333; border-radius:8px; cursor:pointer; }
+  #diff-row button.sel { border-color:#ffdd00; color:#ffdd00; }
   #host-shop-veil { position:fixed; top:70px; left:0; right:0; text-align:center; z-index:6; pointer-events:none; color:#ffdd66; font-weight:800; display:none; text-shadow:0 2px 6px #000; }
   #shop { background:rgba(0,0,0,.82); display:none; }
   #shop h2 { font-size:44px; color:#ffdd66; letter-spacing:4px; text-shadow:0 0 24px #aa7700; }
@@ -162,6 +168,11 @@
     <button id="tab-solo" class="active" onclick="window.setMode('solo')">1 PLAYER</button>
     <button id="tab-multi" onclick="window.setMode('multi')">👥 MULTIPLAYER</button>
   </div>
+  <div id="diff-row">DIFFICULTY:
+    <button data-diff="0" class="sel" onclick="window.setDiff(0)">🟢 EASY</button>
+    <button data-diff="1" onclick="window.setDiff(1)">🟡 NORMAL</button>
+    <button data-diff="2" onclick="window.setDiff(2)">🔴 HARD</button>
+  </div>
   <div id="load-status"></div>
   <div class="maps">
     <div class="map-card" data-map="graveyard">
@@ -188,6 +199,7 @@
     <br>Press <b>`</b> any time during the hunt to open the shop window — weapons, ammo, upgrades, stats, aid and extra life are all in there.
     <br><b>12 weapons</b>: Pistol, Rifle, Shotgun, SMG, Sniper, Minigun, 💣 Grenade (hold CLICK to charge, release to lob), 🚀 Rocket, ⚫ Mine, 🔮 Plasma, ☠️ Bane, 🔱 Railgun (bolts pierce walls) — kills reveal them in the shop, cash buys your own copy (+ammo, single combined upgrade to Lv15, ✚ aid)
     <br>Zombies drop <b style="color:#ffdd66">$ coins</b> • buy stats (❤ max HP, 🛡 defense, 👟 speed), aid, 💖 life • upgrade each weapon with ONE button to Lv15 (damage + rate + mag every level, pierce/blast every 3) • ⚠️ explosives hurt YOU too • <b>👹 Boss every 10 rounds</b> — Brute, Spitter, Blink, Wraith, Summoner, then combos! • new breeds join as rounds climb: spitters, dashers, bombers, leapers, speeders, splitters, menders, shades…
+    <br>DIFFICULTY (pick above): 🟢 <b>EASY</b> baseline • 🟡 <b>NORMAL</b> tougher zombies, pricier shops, richer coins • 🔴 <b>HARD</b> brutal horde, best scores
   </div>
 
   <div id="multi-box" style="display:none">
@@ -207,6 +219,11 @@
         <button data-map="graveyard" class="sel" onclick="window.netMap('graveyard')">🪦</button>
         <button data-map="city" onclick="window.netMap('city')">🏢</button>
         <button data-map="desert" onclick="window.netMap('desert')">🌵</button>
+      </div>
+      <div id="net-diffrow">DIFFICULTY:
+        <button data-diff="0" class="sel" onclick="window.netDiff(0)">🟢 EASY</button>
+        <button data-diff="1" onclick="window.netDiff(1)">🟡 NORMAL</button>
+        <button data-diff="2" onclick="window.netDiff(2)">🔴 HARD</button>
       </div>
       <div style="margin-top:10px">
         <button id="net-start" onclick="window.netStart()">START HUNT</button>
@@ -292,12 +309,19 @@
     el = $('tab-multi'); if (el) el.classList.toggle('active', !solo);
     el = document.querySelector('#menu .maps'); if (el) el.style.display = solo ? '' : 'none';
     el = $('controls-help'); if (el) el.style.display = solo ? '' : 'none';
+    el = $('diff-row'); if (el) el.style.display = solo ? '' : 'none';
     el = $('multi-box'); if (el) el.style.display = solo ? 'none' : 'block';
     const srv = $('net-server');
     if (srv && !srv.value) {
       if (/^https?:/.test(location.protocol)) srv.value = location.host;
       else srv.placeholder = 'HOST:PORT (run server.py)';
     }
+  };
+  window.setDiff = function (d) {
+    window.__diffSolo = Math.max(0, Math.min(2, d | 0));
+    document.querySelectorAll('#diff-row button').forEach(function (b) {
+      b.classList.toggle('sel', +b.getAttribute('data-diff') === window.__diffSolo);
+    });
   };
   window.netStatus = function (t) { const el = $('net-status'); if (el) el.textContent = t || ''; };
 })();

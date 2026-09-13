@@ -82,6 +82,12 @@
   #net-maprow { margin-top:8px; color:#aaa; font-size:14px; }
   #net-maprow button { padding:6px 12px; margin:2px; background:#222; color:#ccc; border:1px solid #444; border-radius:6px; cursor:pointer; font-size:16px; }
   #net-maprow button.sel { border-color:#ffdd00; color:#ffdd00; }
+  #net-diffrow { margin-top:8px; color:#aaa; font-size:14px; }
+  #net-diffrow button { padding:6px 12px; margin:2px; background:#222; color:#ccc; border:1px solid #444; border-radius:6px; cursor:pointer; font-size:13px; font-weight:800; }
+  #net-diffrow button.sel { border-color:#ffdd00; color:#ffdd00; }
+  #diff-row { display:flex; gap:10px; margin:2px 0 14px; align-items:center; color:#aaa; font-size:14px; letter-spacing:1px; }
+  #diff-row button { padding:10px 22px; font-weight:800; letter-spacing:1px; background:#1a1a1a; color:#888; border:2px solid #333; border-radius:8px; cursor:pointer; }
+  #diff-row button.sel { border-color:#ffdd00; color:#ffdd00; }
   #host-shop-veil { position:fixed; top:70px; left:0; right:0; text-align:center; z-index:6; pointer-events:none; color:#ffdd66; font-weight:800; display:none; text-shadow:0 2px 6px #000; }
   #shop { background:rgba(0,0,0,.82); display:none; }
   #shop h2 { font-size:44px; color:#ffdd66; letter-spacing:4px; text-shadow:0 0 24px #aa7700; }
@@ -166,6 +172,11 @@
     <button id="tab-solo" class="active" onclick="window.setMode('solo')">1 PLAYER</button>
     <button id="tab-multi" onclick="window.setMode('multi')">👥 MULTIPLAYER</button>
   </div>
+  <div id="diff-row">DIFFICULTY:
+    <button data-diff="0" class="sel" onclick="window.setDiff(0)">🟢 EASY</button>
+    <button data-diff="1" onclick="window.setDiff(1)">🟡 NORMAL</button>
+    <button data-diff="2" onclick="window.setDiff(2)">🔴 HARD</button>
+  </div>
   <div id="load-status"></div>
   <div class="maps">
     <div class="map-card" data-map="graveyard">
@@ -192,6 +203,7 @@
     <br>Press <b>`</b> any time during the hunt to open the shop window — weapons, ammo, upgrades, stats, aid and extra life are all in there.
     <br><b>12 weapons</b>: Pistol, Rifle, Shotgun, SMG, Sniper, Minigun, 💣 Grenade (hold CLICK to charge, release to lob), 🚀 Rocket, ⚫ Mine, 🔮 Plasma, ☠️ Bane, 🔱 Railgun (bolts pierce walls) — kills reveal them in the shop, cash buys your own copy (+ammo, single combined upgrade to Lv15, ✚ aid)
     <br>Zombies drop <b style="color:#ffdd66">$ coins</b> • buy stats (❤ max HP, 🛡 defense, 👟 speed), aid, 💖 life • upgrade each weapon with ONE button to Lv15 (damage + rate + mag every level, pierce/blast every 3) • ⚠️ explosives hurt YOU too • <b>👹 Boss every 10 rounds</b> — Brute, Spitter, Blink, Wraith, Summoner, then combos! • new breeds join as rounds climb: spitters, dashers, bombers, leapers, speeders, splitters, menders, shades…
+    <br>DIFFICULTY (pick above): 🟢 <b>EASY</b> baseline • 🟡 <b>NORMAL</b> tougher zombies, pricier shops, richer coins • 🔴 <b>HARD</b> brutal horde, best scores
   </div>
 
   <div id="multi-box" style="display:none">
@@ -211,6 +223,11 @@
         <button data-map="graveyard" class="sel" onclick="window.netMap('graveyard')">🪦</button>
         <button data-map="city" onclick="window.netMap('city')">🏢</button>
         <button data-map="desert" onclick="window.netMap('desert')">🌵</button>
+      </div>
+      <div id="net-diffrow">DIFFICULTY:
+        <button data-diff="0" class="sel" onclick="window.netDiff(0)">🟢 EASY</button>
+        <button data-diff="1" onclick="window.netDiff(1)">🟡 NORMAL</button>
+        <button data-diff="2" onclick="window.netDiff(2)">🔴 HARD</button>
       </div>
       <div style="margin-top:10px">
         <button id="net-start" onclick="window.netStart()">START HUNT</button>
@@ -283,8 +300,8 @@ const ARENA_HALF = 28;
 const PCOLORS = [0x2266cc, 0xcc7722, 0x8833cc, 0x22cccc];
 const NET = {
   ws: null, id: -1, slot: 0, host: false, room: null, name: 'Hunter',
-  peers: [], seq: 0, snapTimer: 0, inTimer: 0, mapPick: 'graveyard',
-  pendingWsel: -1,
+  peers: [], seq: 0, snapTimer: 0, inTimer: 0, mapPick: 'graveyard', diffPick: 0,
+  pendingWsel: -1, buyAs: null,
 };
 let players = [];
 let ZID = 0;
@@ -417,10 +434,17 @@ function updateLobbyUI() {
       const mk = b.getAttribute('data-map');
       b.classList.toggle('sel', mk === NET.mapPick);
     });
-    // Map choice is host-only: guests never see the row.
+    // Map + difficulty choice is host-only: guests never see the rows.
     try {
       const mr = document.getElementById('net-maprow');
       if (mr) mr.style.display = (inRoom && !NET.host) ? 'none' : '';
+      const dr = document.getElementById('net-diffrow');
+      if (dr) {
+        dr.style.display = (inRoom && !NET.host) ? 'none' : '';
+        dr.querySelectorAll('button').forEach((b) => {
+          b.classList.toggle('sel', +b.getAttribute('data-diff') === (NET.diffPick || 0));
+        });
+      }
     } catch (e) {}
     const st = document.getElementById('net-start');
     if (st) {
@@ -525,6 +549,7 @@ window.netStart = function () {
   if (!isNet()) { netSay('Create or join a room first'); return; }
   if (!isHost()) { netSay('Only the host can start'); return; }
   const map = NET.mapPick || 'graveyard';
+  netSend({ t: 'diff', diff: NET.diffPick || 0 }); // order-preserved: guests set it before start
   netSend({ t: 'start', map });
   // Host starts immediately; the echoed broadcast is ignored via debounce.
   // Guests start when the broadcast arrives.
@@ -535,6 +560,12 @@ window.netMap = function (map) {
   updateLobbyUI();
   if (isNet() && isHost()) netSend({ t: 'map', map: NET.mapPick });
   else if (isNet() && !isHost()) netSay('Only the host picks the map');
+};
+window.netDiff = function (d) {
+  NET.diffPick = Math.max(0, Math.min(2, d | 0));
+  updateLobbyUI();
+  if (isNet() && isHost()) netSend({ t: 'diff', diff: NET.diffPick });
+  else if (isNet() && !isHost()) netSay('Only the host picks difficulty');
 };
 function handleNetMsg(msg) {
   if (!msg || typeof msg.t !== 'string') return;
@@ -580,6 +611,10 @@ function handleNetMsg(msg) {
   if (t === 'error') { netSay(msg.why || 'Join failed'); return; }
   if (t === 'map') {
     if (msg.map) { NET.mapPick = msg.map; updateLobbyUI(); }
+    return;
+  }
+  if (t === 'diff') {
+    if (msg.diff !== undefined) { NET.diffPick = Math.max(0, Math.min(2, msg.diff | 0)); updateLobbyUI(); }
     return;
   }
   const from = msg.from;
@@ -645,6 +680,7 @@ function buildSnapshot() {
     round: G.round, score: G.score, kills: G.kills, money: moneyOf(NET.slot), lives: G.lives,
     state: G.state, boss: !!G.isBossRound, hpUps: G.hpUps, defUps: G.defUps, spdUps: G.spdUps,
     defense: G.defense, spawnLeft: (G.spawnQueue || 0) + zombies.length + ((G.bossQueue || []).length),
+    diff: G.diff || 0,
   };
   const ps = [];
   for (const p of players) {
@@ -727,6 +763,7 @@ function applySnapshot(s) {
     if (typeof G === 'undefined' || !scene) return;
     const wasShopOpen = !!G.shopOpen;
     G.round = s.g.round; G.score = s.g.score; G.kills = s.g.kills;
+    if (s.g.diff !== undefined) G.diff = Math.max(0, Math.min(2, s.g.diff | 0));
     G.lives = s.g.lives; G.state = s.g.state; G.isBossRound = !!s.g.boss;
     G.hpUps = s.g.hpUps || 0; G.defUps = s.g.defUps || 0; G.spdUps = s.g.spdUps || 0;
     G.defense = s.g.defense || 0;
@@ -1080,18 +1117,18 @@ const MAPS = {
 // key: keyboard key (1-9,0). drop: ammo per ◆ bullets pickup. blast: AoE radius.
 // wallIgnore: railgun bolts fly through walls AND zombies.
 function baseWeaponDefs() { return [
-  { name: 'Pistol',   icon: '🔫', key: '1', kind: 'gun',     damage: 34,  cooldown: 0.26,  bulletSpeed: 46, range: 30, spread: 0.02,  pellets: 1, ammo: Infinity, maxAmmo: Infinity, drop: 0,  color: 0xffff66, freq: 750, unlockKills: 0,    unlocked: true,  up: 0, pierce: 0, blast: 0, wallIgnore: false },
-  { name: 'Rifle',    icon: '🔥', key: '2', kind: 'gun',     damage: 24,  cooldown: 0.115, bulletSpeed: 60, range: 38, spread: 0.07,  pellets: 1, ammo: 120,      maxAmmo: 400,      drop: 12, color: 0x66ccff, freq: 420, unlockKills: 20,   unlocked: false, up: 0, pierce: 0, blast: 0, wallIgnore: false },
-  { name: 'Shotgun',  icon: '💥', key: '3', kind: 'gun',     damage: 18,  cooldown: 0.8,   bulletSpeed: 40, range: 22, spread: 0.24,  pellets: 6, ammo: 24,       maxAmmo: 100,      drop: 4,  color: 0xff8833, freq: 160, unlockKills: 50,   unlocked: false, up: 0, pierce: 0, blast: 0, wallIgnore: false },
-  { name: 'SMG',      icon: '⚡', key: '4', kind: 'gun',     damage: 14,  cooldown: 0.07,  bulletSpeed: 55, range: 26, spread: 0.09,  pellets: 1, ammo: 200,      maxAmmo: 500,      drop: 30, color: 0xaaffff, freq: 600, unlockKills: 90,   unlocked: false, up: 0, pierce: 0, blast: 0, wallIgnore: false },
-  { name: 'Sniper',   icon: '🔭', key: '5', kind: 'gun',     damage: 220, cooldown: 1.3,   bulletSpeed: 95, range: 60, spread: 0.005, pellets: 1, ammo: 20,       maxAmmo: 60,       drop: 4,  color: 0xccffcc, freq: 200, unlockKills: 140,  unlocked: false, up: 0, pierce: 2, blast: 0, wallIgnore: false },
-  { name: 'Minigun',  icon: '🌀', key: '6', kind: 'gun',     damage: 20,  cooldown: 0.05,  bulletSpeed: 60, range: 30, spread: 0.09,  pellets: 1, ammo: 400,      maxAmmo: 800,      drop: 60, color: 0xffcc00, freq: 500, unlockKills: 280,  unlocked: false, up: 0, pierce: 0, blast: 0, wallIgnore: false },
-  { name: 'Grenade',  icon: '💣', key: '7', kind: 'grenade', damage: 140, cooldown: 1.0,   bulletSpeed: 16, range: 20, spread: 0,     pellets: 1, ammo: 10,       maxAmmo: 30,       drop: 2,  color: 0x77ff44, freq: 180, unlockKills: 370,  unlocked: false, up: 0, pierce: 0, blast: 4.5, wallIgnore: false },
-  { name: 'Rocket',   icon: '🚀', key: '8', kind: 'rocket',  damage: 130, cooldown: 1.1,   bulletSpeed: 40, range: 40, spread: 0,     pellets: 1, ammo: 12,       maxAmmo: 36,       drop: 3,  color: 0xff6644, freq: 140, unlockKills: 470,  unlocked: false, up: 0, pierce: 0, blast: 4, wallIgnore: false },
+  { name: 'Pistol',   icon: '🔫', key: '1', kind: 'gun',     damage: 34,  cooldown: 0.26,  bulletSpeed: 46, range: 18, spread: 0.02,  pellets: 1, ammo: Infinity, maxAmmo: Infinity, drop: 0,  color: 0xffff66, freq: 750, unlockKills: 0,    unlocked: true,  up: 0, pierce: 0, blast: 0, wallIgnore: false },
+  { name: 'Rifle',    icon: '🔥', key: '2', kind: 'gun',     damage: 24,  cooldown: 0.115, bulletSpeed: 60, range: 24, spread: 0.07,  pellets: 1, ammo: 120,      maxAmmo: 400,      drop: 12, color: 0x66ccff, freq: 420, unlockKills: 20,   unlocked: false, up: 0, pierce: 0, blast: 0, wallIgnore: false },
+  { name: 'Shotgun',  icon: '💥', key: '3', kind: 'gun',     damage: 20,  cooldown: 0.75,  bulletSpeed: 40, range: 14, spread: 0.24,  pellets: 6, ammo: 24,       maxAmmo: 100,      drop: 4,  color: 0xff8833, freq: 160, unlockKills: 50,   unlocked: false, up: 0, pierce: 0, blast: 0, wallIgnore: false },
+  { name: 'SMG',      icon: '⚡', key: '4', kind: 'gun',     damage: 16,  cooldown: 0.07,  bulletSpeed: 55, range: 16, spread: 0.09,  pellets: 1, ammo: 200,      maxAmmo: 500,      drop: 30, color: 0xaaffff, freq: 600, unlockKills: 90,   unlocked: false, up: 0, pierce: 0, blast: 0, wallIgnore: false },
+  { name: 'Sniper',   icon: '🔭', key: '5', kind: 'gun',     damage: 240, cooldown: 1.3,   bulletSpeed: 95, range: 34, spread: 0.005, pellets: 1, ammo: 20,       maxAmmo: 60,       drop: 4,  color: 0xccffcc, freq: 200, unlockKills: 140,  unlocked: false, up: 0, pierce: 2, blast: 0, wallIgnore: false },
+  { name: 'Minigun',  icon: '🌀', key: '6', kind: 'gun',     damage: 20,  cooldown: 0.05,  bulletSpeed: 60, range: 20, spread: 0.09,  pellets: 1, ammo: 400,      maxAmmo: 800,      drop: 60, color: 0xffcc00, freq: 500, unlockKills: 280,  unlocked: false, up: 0, pierce: 0, blast: 0, wallIgnore: false },
+  { name: 'Grenade',  icon: '💣', key: '7', kind: 'grenade', damage: 140, cooldown: 1.0,   bulletSpeed: 16, range: 26, spread: 0,     pellets: 1, ammo: 10,       maxAmmo: 30,       drop: 2,  color: 0x77ff44, freq: 180, unlockKills: 370,  unlocked: false, up: 0, pierce: 0, blast: 4.5, wallIgnore: false },
+  { name: 'Rocket',   icon: '🚀', key: '8', kind: 'rocket',  damage: 130, cooldown: 1.1,   bulletSpeed: 40, range: 26, spread: 0,     pellets: 1, ammo: 12,       maxAmmo: 36,       drop: 3,  color: 0xff6644, freq: 140, unlockKills: 470,  unlocked: false, up: 0, pierce: 0, blast: 4, wallIgnore: false },
   { name: 'Mine',     icon: '⚫', key: '9', kind: 'mine',    damage: 200, cooldown: 0.8,   bulletSpeed: 0,  range: 0,  spread: 0,     pellets: 1, ammo: 8,        maxAmmo: 24,       drop: 2,  color: 0x888888, freq: 260, unlockKills: 580,  unlocked: false, up: 0, pierce: 0, blast: 5, wallIgnore: false },
-  { name: 'Plasma',   icon: '🔮', key: '0', kind: 'gun',     damage: 80,  cooldown: 0.28,  bulletSpeed: 75, range: 50, spread: 0.05,  pellets: 2, ammo: 100,      maxAmmo: 200,      drop: 12, color: 0xcc66ff, freq: 660, unlockKills: 700,  unlocked: false, up: 0, pierce: 1, blast: 0, wallIgnore: false },
-  { name: 'Bane',     icon: '☠️', key: '-', kind: 'gun',     damage: 170, cooldown: 0.45,  bulletSpeed: 80, range: 55, spread: 0.06,  pellets: 3, ammo: 60,       maxAmmo: 120,      drop: 8,  color: 0xff00ff, freq: 240, unlockKills: 850,  unlocked: false, up: 0, pierce: 1, blast: 0, wallIgnore: false },
-  { name: 'Railgun',  icon: '🔱', key: '=', kind: 'gun',     damage: 160, cooldown: 1.0,   bulletSpeed: 90, range: 70, spread: 0.005, pellets: 1, ammo: 24,       maxAmmo: 72,       drop: 5,  color: 0x66ffff, freq: 180, unlockKills: 1000, unlocked: false, up: 0, pierce: 5, blast: 0, wallIgnore: true },
+  { name: 'Plasma',   icon: '🔮', key: '0', kind: 'gun',     damage: 80,  cooldown: 0.28,  bulletSpeed: 75, range: 26, spread: 0.05,  pellets: 2, ammo: 100,      maxAmmo: 200,      drop: 12, color: 0xcc66ff, freq: 660, unlockKills: 700,  unlocked: false, up: 0, pierce: 1, blast: 0, wallIgnore: false },
+  { name: 'Bane',     icon: '☠️', key: '-', kind: 'gun',     damage: 170, cooldown: 0.45,  bulletSpeed: 80, range: 28, spread: 0.06,  pellets: 3, ammo: 60,       maxAmmo: 120,      drop: 8,  color: 0xff00ff, freq: 240, unlockKills: 850,  unlocked: false, up: 0, pierce: 1, blast: 0, wallIgnore: false },
+  { name: 'Railgun',  icon: '🔱', key: '=', kind: 'gun',     damage: 280, cooldown: 0.9,   bulletSpeed: 90, range: 36, spread: 0.005, pellets: 1, ammo: 24,       maxAmmo: 72,       drop: 5,  color: 0x66ffff, freq: 180, unlockKills: 1000, unlocked: false, up: 0, pierce: 5, blast: 0, wallIgnore: true },
 ]; }
 const WBLURB = [
   'Trusty sidearm with endless ammo. Simple and steady.',
@@ -1132,14 +1169,14 @@ const UPGRADE_NEED = [0, 10, 25, 45, 70, 100, 135, 175, 220, 270, 325, 385, 450,
 // Later weapons demand more kills per level (still ordered: higher level and
 // higher tier always need at least as many). Pistol Lv1 = 10, Rifle Lv1 = 11,
 // Bane Lv1 = 21 … Bane Lv15 = 1470 team kills.
-function upgradeNeedFor(i, lvl) { return Math.round((UPGRADE_NEED[lvl] || 0) * (1 + i * 0.1)); }
-function upgradeCost(w, i) { return Math.round((Math.max(WPRICE[i], 60) * 0.05 + 30) * (w.up + 1)); }
+function upgradeNeedFor(i, lvl) { return Math.round((UPGRADE_NEED[lvl] || 0) * (1 + i * 0.1) * DG().killM); }
+function upgradeCost(w, i) { return Math.round((Math.max(WP(i), 60) * 0.05 + 30) * (w.up + 1)); }
 function hpCost() { return 150 + 150 * G.hpUps; }
 function defCost() { return 250 + 200 * G.defUps; }
 function spdCost() { return 250 + 200 * G.spdUps; }
 // Ammo is priced by the bullet: a full refill costs 15% of the weapon price,
 // and topping up costs that pro-rata for the missing rounds (rounded, min $1).
-function ammoFullCost(i) { return Math.max(10, Math.round(WPRICE[i] * 0.15)); }
+function ammoFullCost(i) { return Math.max(20, Math.round(WP(i) * 0.3)); }
 function ammoCost(i, A) {
   A = A || AW(player);
   const w = A[i];
@@ -1282,6 +1319,7 @@ const G = {
   money: 0,
   lives: 0,
   hpUps: 0, defUps: 0, spdUps: 0, defense: 0,
+  diff: 0, // 0 EASY (baseline) | 1 NORMAL | 2 HARD
 };
 
 let player = null; // {group, pos:Vector3, hp, maxHp, speed, radius, aim:Vector3, hurtCd}
@@ -1592,9 +1630,10 @@ function spawnZombie(forceType, atPos) {
   const round = G.round;
   const type = forceType || pickZombieType();
   const teamN = Math.max(1, players.filter((p) => p).length);
-  let hp = Math.round((55 + round * 20) * cfg.hpMult * (1 + 0.35 * (teamN - 1)));
-  let speed = Math.min(6.2, (1.7 + round * 0.28) * cfg.speedMult + Math.random() * 0.6);
-  let damage = Math.round(7 + round * 1.8);
+  const DF = DG();
+  let hp = Math.round((55 + round * 20) * cfg.hpMult * (1 + 0.35 * (teamN - 1)) * DF.hpM);
+  let speed = Math.min(6.2, ((1.7 + round * 0.28) * cfg.speedMult + Math.random() * 0.6) * DF.spdM);
+  let damage = Math.round((7 + round * 1.8) * DF.dmgM);
   let scoreMult = 1;
   if (type === 'spitter') { hp = Math.round(hp * 0.8); speed *= 0.8; scoreMult = 1.3; }
   else if (type === 'bomber') { hp = Math.round(hp * 0.7); speed = Math.min(7, speed * 1.5); scoreMult = 1.5; }
@@ -1789,7 +1828,8 @@ function spawnBoss(kind) {
   const cfg = MAPS[G.mapKey];
   const round = G.round;
   const teamN = Math.max(1, players.filter((p) => p).length);
-  const base = (55 + round * 20) * cfg.hpMult * (1 + 0.35 * (teamN - 1));
+  const base = (55 + round * 20) * cfg.hpMult * (1 + 0.35 * (teamN - 1)) * DG().hpM;
+  const spdM = DG().spdM;
   let hp, speed, damage;
 
   const g = new THREE.Group();
@@ -1799,8 +1839,8 @@ function spawnBoss(kind) {
   if (kind === 1) {
     // SPITTER: purple brute, glowing mouth, hurls ember spreads
     hp = Math.round(base * (4 + round * 0.4));
-    speed = Math.min(3.2, 2.1 + round * 0.05);
-    damage = Math.round(16 + round * 1.5);
+    speed = Math.min(3.2, (2.1 + round * 0.05) * spdM);
+    damage = zdmg(16 + round * 1.5);
     bodyMat = new THREE.MeshStandardMaterial({ color: 0x7a1a6a, roughness: 0.8 });
     baseColor = new THREE.Color(0x7a1a6a);
     bodyMesh = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.8, 0.9), bodyMat);
@@ -1818,8 +1858,8 @@ function spawnBoss(kind) {
   } else if (kind === 2) {
     // BLINK: teal brute, teleports around the player
     hp = Math.round(base * (4 + round * 0.4));
-    speed = Math.min(3.8, 2.6 + round * 0.05);
-    damage = Math.round(18 + round * 2);
+    speed = Math.min(3.8, (2.6 + round * 0.05) * spdM);
+    damage = zdmg(18 + round * 2);
     bodyMat = new THREE.MeshStandardMaterial({ color: 0x1a5a6a, roughness: 0.7, emissive: 0x002222 });
     baseColor = new THREE.Color(0x1a5a6a);
     bodyMesh = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.8, 0.9), bodyMat);
@@ -1839,8 +1879,8 @@ function spawnBoss(kind) {
   } else if (kind === 3) {
     // WRAITH: grey phaser, turns invisible for seconds at a time
     hp = Math.round(base * (3.5 + round * 0.35));
-    speed = Math.min(3.2, 2.0 + round * 0.05);
-    damage = Math.round(15 + round * 1.5);
+    speed = Math.min(3.2, (2.0 + round * 0.05) * spdM);
+    damage = zdmg(15 + round * 1.5);
     bodyMat = new THREE.MeshStandardMaterial({ color: 0x555566, roughness: 0.85, transparent: true, opacity: 0.92 });
     baseColor = new THREE.Color(0x555566);
     bodyMesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.9, 0.8), bodyMat);
@@ -1854,8 +1894,8 @@ function spawnBoss(kind) {
   } else if (kind === 4) {
     // SUMMONER: bulky brute with a skull totem, calls its brood
     hp = Math.round(base * (4.5 + round * 0.45));
-    speed = Math.min(3.0, 2.0 + round * 0.05);
-    damage = Math.round(14 + round * 1.5);
+    speed = Math.min(3.0, (2.0 + round * 0.05) * spdM);
+    damage = zdmg(14 + round * 1.5);
     bodyMat = new THREE.MeshStandardMaterial({ color: 0x8a5a1a, roughness: 0.85 });
     baseColor = new THREE.Color(0x8a5a1a);
     bodyMesh = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.8, 1.0), bodyMat);
@@ -1878,8 +1918,8 @@ function spawnBoss(kind) {
   } else {
     // BRUTE: classic red brute, contact damage only
     hp = Math.round(base * (5 + round * 0.5));
-    speed = Math.min(3.4, 2.2 + round * 0.05);
-    damage = Math.round(20 + round * 2);
+    speed = Math.min(3.4, (2.2 + round * 0.05) * spdM);
+    damage = zdmg(20 + round * 2);
     bodyMat = new THREE.MeshStandardMaterial({ color: 0x8a1a3a, roughness: 0.8, emissive: 0x330011 });
     baseColor = new THREE.Color(0x8a1a3a);
     bodyMesh = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.9, 1.0), bodyMat);
@@ -1951,7 +1991,7 @@ function upgradeNote(w) {
 function syncUnlocks() {
   const fresh = [];
   WEAPONS.forEach((w) => {
-    if (!w.revealed && G.kills >= w.unlockKills) { w.revealed = true; fresh.push(w); }
+    if (!w.revealed && G.kills >= unlockNeed(w)) { w.revealed = true; fresh.push(w); }
   });
   return fresh;
 }
@@ -2091,8 +2131,23 @@ function spawnCoins(pos, value) {
     drops.push({ mesh: m, kind: 'coin', value: v, life: 25, bob: Math.random() * 6 });
   }
 }
+// Difficulty: EASY is the baseline; NORMAL/HARD scale zombie strength,
+// shop prices, coin rewards, scores and kill gates. Picked on the homepage
+// (solo) or by the host (co-op, synced to guests).
+const DIFFS = [
+  { name: 'EASY',   short: '',       hpM: 1,    spdM: 1,    dmgM: 1,    priceM: 1,    coinM: 1,   killM: 1,   scoreM: 1 },
+  { name: 'NORMAL', short: 'NORMAL', hpM: 1.35, spdM: 1.08, dmgM: 1.2,  priceM: 1.15, coinM: 1.2, killM: 1.2, scoreM: 1.25 },
+  { name: 'HARD',   short: 'HARD',   hpM: 1.7,  spdM: 1.15, dmgM: 1.45, priceM: 1.3,  coinM: 1.5, killM: 1.5, scoreM: 1.5 },
+];
+function DG() { return DIFFS[G.diff || 0]; }
+// Price of weapon i at current difficulty.
+function WP(i) { return Math.round(WPRICE[i] * DG().priceM); }
+// Kills to reveal weapon w at current difficulty.
+function unlockNeed(w) { return Math.round(w.unlockKills * DG().killM); }
+// Zombie damage at current difficulty.
+function zdmg(v) { return Math.round(v * DG().dmgM); }
 function coinValue(z) {
-  return Math.round((5 + G.round) * (z.scoreMult || 1));
+  return Math.round((5 + G.round) * (z.scoreMult || 1) * DG().coinM);
 }
 
 // ============ HELPERS ============
@@ -2252,13 +2307,13 @@ function switchWeapon(i) {
   if (isNet() && !isHost()) {
     // guest: validate locally for feedback, host applies authoritatively
     if (!base.revealed) { showMessage(`🔒 ??? — keep hunting to reveal new weapons!`, 2000); sfx.locked(); return; }
-    if (!unlocked) { showMessage(`${base.icon} ${base.name} costs $${WPRICE[i]} — open the shop (\`)!`, 2000); sfx.locked(); return; }
+    if (!unlocked) { showMessage(`${base.icon} ${base.name} costs $${WP(i)} — open the shop (\`)!`, 2000); sfx.locked(); return; }
     NET.pendingWsel = i;
     setPlayerWeapon(player, i); // optimistic visual, snapshot confirms
     return;
   }
   if (!base.revealed) { showMessage(`🔒 ??? — keep hunting to reveal new weapons!`, 2000); sfx.locked(); return; }
-  if (!unlocked) { showMessage(`${base.icon} ${base.name} costs $${WPRICE[i]} — open the shop (\`)!`, 2000); sfx.locked(); return; }
+  if (!unlocked) { showMessage(`${base.icon} ${base.name} costs $${WP(i)} — open the shop (\`)!`, 2000); sfx.locked(); return; }
   setPlayerWeapon(player, i);
 }
 
@@ -2269,7 +2324,7 @@ function updateHUD() {
   document.getElementById('hud-zombies').textContent = `🧟 ${left} left`;
   document.getElementById('hud-score').textContent = `SCORE ${G.score}`;
   document.getElementById('hud-kills').textContent = `KILLS ${G.kills}`;
-  document.getElementById('hud-map').textContent = MAPS[G.mapKey].label;
+  document.getElementById('hud-map').textContent = MAPS[G.mapKey].label + (DG().short ? ' • ' + DG().short : '');
   document.getElementById('hud-money').textContent = `$${viewMoney()}`;
   if (isNet()) {
     const k = (player && player.kit) || 0;
@@ -2338,7 +2393,7 @@ function updateWeaponHUD() {
       ammoEl.textContent = w.ammo === Infinity ? '∞' : w.ammo;
     } else {
       nameEl.textContent = `${w.icon} ${w.name}`;
-      ammoEl.textContent = `$${WPRICE[i]}`;
+      ammoEl.textContent = `$${WP(i)}`;
     }
   });
 }
@@ -2360,8 +2415,8 @@ function updateWeaponHUD() {
         const base = WEAPONS[idx];
         // Revealed but not yet bought: click buys it (switching to it if it worked).
         if (w && base && base.revealed && !w.unlocked) {
-          if (viewMoney() < WPRICE[idx]) {
-            showMessage(`${w.icon} ${w.name} costs $${WPRICE[idx]} — need $${WPRICE[idx] - viewMoney()} more!`, 1800);
+          if (viewMoney() < WP(idx)) {
+            showMessage(`${w.icon} ${w.name} costs $${WP(idx)} — need $${WP(idx) - viewMoney()} more!`, 1800);
             sfx.locked();
             return;
           }
@@ -2399,6 +2454,7 @@ window.startGame = function (mapKey, fromNet) {
   ac();
   if (isNet() && !fromNet) netLeave();
   G.mapKey = mapKey || 'graveyard';
+  G.diff = isNet() ? (NET.diffPick || 0) : (window.__diffSolo || 0);
   NET.mapPick = G.mapKey;
   NET.snapTimer = 0; NET.inTimer = 0; NET.pendingWsel = -1; NET.seq = 0;
   try {
@@ -2512,7 +2568,8 @@ function upgradeBtn(w, i) {
 function boxNote(w) {
   const ammo = w.ammo === Infinity ? 'unlimited ammo' : `ammo ${w.ammo} of ${w.maxAmmo}`;
   const extra = w.kind !== 'gun' ? `blast ${w.blast}` : (w.pierce > 0 ? `pierce ${w.pierce}` : 'no pierce');
-  return `${w.icon} ${w.name}: ${w.blurb} Damage ${w.damage}, every ${w.cooldown}s, range ${w.range}, ${extra}, ${ammo}.`;
+  const dps = w.kind === 'gun' ? `DPS ~${Math.round(w.damage * w.pellets / w.cooldown)}, ` : '';
+  return `${w.icon} ${w.name}: ${w.blurb} Damage ${w.damage}, ${dps}every ${w.cooldown}s, range ${w.range}, ${extra}, ${ammo}.`;
 }
 function statCard(name, sub, cost, maxed, fn, note) {
   return `<div class="sbox" data-note="${note}"><div class="sname">${name}</div><div class="slevel">${sub}</div><button ${(maxed || viewMoney() < cost) ? 'disabled' : ''} onclick="${fn}">${maxed ? 'MAX' : 'UP $' + cost}</button></div>`;
@@ -2545,7 +2602,7 @@ function renderShop() {
       return;
     }
     if (!w.unlocked) {
-      const p = WPRICE[i], afford = viewMoney() >= p;
+      const p = WP(i), afford = viewMoney() >= p;
       h += `<div class="sbox" data-note="${boxNote(w)}"><div class="sname">${w.icon} ${w.name}</div><div class="slevel">${afford ? 'NEW' : `need $${p - viewMoney()} more`}</div><button ${afford ? '' : 'disabled'} onclick="window.buyWeapon(${i})">BUY $${p}</button></div>`;
       return;
     }
@@ -2582,8 +2639,8 @@ window.buyWeapon = function (i) {
   const A = isNet() ? players[bs].ars : WEAPONS;
   if (!A) return;
   const w = A[i];
-  if (!WEAPONS[i].revealed || w.unlocked || moneyOf(bs) < WPRICE[i]) return;
-  addMoney(bs, -WPRICE[i]);
+  if (!WEAPONS[i].revealed || w.unlocked || moneyOf(bs) < WP(i)) return;
+  addMoney(bs, -WP(i));
   w.unlocked = true;
   w.ammo = w.maxAmmo;
   sfx.unlock();
@@ -2903,7 +2960,7 @@ function updateZombies(dt) {
           z.spitCd -= dt;
           if (z.spitCd <= 0 && dist < 30) {
             z.spitCd = 3.2;
-            spitAt(z, { color: 0xff4422, speed: 11, damage: Math.round(14 + G.round * 1.5), size: 0.26, count: 3 }, tgt);
+            spitAt(z, { color: 0xff4422, speed: 11, damage: zdmg(14 + G.round * 1.5), size: 0.26, count: 3 }, tgt);
           }
         } else if (bk === 2) {
           // BLINK: teleport to a ring around the player
@@ -2990,7 +3047,8 @@ function updateZombies(dt) {
       }
       // shade: a ghost while far away, solid and fast once it closes in
       if (z.type === 'shade' && z.bodyMat) {
-        const op = dist < 12 ? 0.9 : 0.18;
+        z.hidden = dist >= 12;
+        const op = z.hidden ? 0.18 : 0.9;
         try {
           z.bodyMat.opacity = op;
           if (z.headMat) z.headMat.opacity = op;
@@ -3016,7 +3074,7 @@ function updateZombies(dt) {
         const bp = zp.clone();
         scene.remove(z.group);
         zombies.splice(i, 1);
-        explode(bp, 3.2, Math.round(22 + G.round * 2), { hurtPlayer: true, hurtZombies: true, color: 0xff5522, size: 1.4 });
+        explode(bp, 3.2, zdmg(22 + G.round * 2), { hurtPlayer: true, hurtZombies: true, color: 0xff5522, size: 1.4 });
         updateHUD();
         continue;
       }
@@ -3062,7 +3120,7 @@ function updateZombies(dt) {
     G.interTimer = 5;
     const bonus = 50 + G.round * 10;
     G.score += bonus;
-    const cash = 25 + G.round * 5;
+    const cash = Math.round((25 + G.round * 5) * DG().coinM);
     if (!isNet()) G.money += cash;
     else for (const p of players) if (p) addMoney(p.slot, cash);
     showBanner(`ROUND ${G.round} CLEAR!`, 2000);
@@ -3111,7 +3169,7 @@ function updateBullets(dt) {
         const dx = p.x - zp.x, dz = p.z - zp.z;
         const hitR = z.isBoss ? 1.5 : 1.0;
         if (dx * dx + dz * dz < hitR && p.y < 3.6) {
-          if (z.invisible) continue; // phased-out wraith cannot be hit
+          if (z.invisible || (z.type === 'shade' && z.hidden)) continue; // phased-out wraiths and veiled shades cannot be hit
           if (explosive) { detonate(b); dead = true; break; }
           if (b.hit.indexOf(z) >= 0) continue; // already pierced: fly through
           z.hp -= b.damage;
@@ -3148,13 +3206,13 @@ function killZombie(index) {
   zombies.splice(index, 1);
   G.kills++;
   const pts = wasBoss
-    ? Math.round((1000 + G.round * 100) * cfg.scoreMult)
-    : Math.round((100 + G.round * 15) * cfg.scoreMult * (z.scoreMult || 1));
+    ? Math.round((1000 + G.round * 100) * cfg.scoreMult * DG().scoreM)
+    : Math.round((100 + G.round * 15) * cfg.scoreMult * (z.scoreMult || 1) * DG().scoreM);
   G.score += pts;
   sfx.zdie();
   burst(pos, wasBoss ? 0xff3333 : 0x55ff33);
   if (z.type === 'bomber' && !wasBoss) {
-    explode(pos, 3.2, Math.round(22 + G.round * 2), { hurtPlayer: true, hurtZombies: true, color: 0xff5522, size: 1.4 });
+    explode(pos, 3.2, zdmg(22 + G.round * 2), { hurtPlayer: true, hurtZombies: true, color: 0xff5522, size: 1.4 });
   }
   // splitter pops into two speeders (capped so the arena never floods)
   if (z.type === 'splitter' && !wasBoss && zombies.length < 22) {
@@ -3162,7 +3220,7 @@ function killZombie(index) {
     showMessage('🫧 The splitter burst apart!', 1500);
   }
   if (wasBoss) {
-    spawnCoins(pos, 200 + G.round * 20);
+    spawnCoins(pos, Math.round((200 + G.round * 20) * DG().coinM));
     showMessage(`👹 BOSS SLAIN! +${pts} pts — grab the coins!`, 3000);
   } else {
     spawnCoins(pos, coinValue(z));
@@ -3465,7 +3523,7 @@ function spitAt(z, opts, tgt) {
   const speed = opts.speed || 14;
   const size = opts.size || 0.17;
   const count = opts.count || 1;
-  const dmg = opts.damage === undefined ? Math.round(8 + G.round) : opts.damage;
+  const dmg = opts.damage === undefined ? zdmg(8 + G.round) : opts.damage;
   const from = z.group.position.clone(); from.y = 1.4;
   const base = tgt.group.position.clone().sub(from); base.y = 0;
   if (base.lengthSq() < 0.01) return;
@@ -3691,12 +3749,19 @@ if (window.__wantedMap) { var m = window.__wantedMap; window.__wantedMap = null;
     el = $('tab-multi'); if (el) el.classList.toggle('active', !solo);
     el = document.querySelector('#menu .maps'); if (el) el.style.display = solo ? '' : 'none';
     el = $('controls-help'); if (el) el.style.display = solo ? '' : 'none';
+    el = $('diff-row'); if (el) el.style.display = solo ? '' : 'none';
     el = $('multi-box'); if (el) el.style.display = solo ? 'none' : 'block';
     const srv = $('net-server');
     if (srv && !srv.value) {
       if (/^https?:/.test(location.protocol)) srv.value = location.host;
       else srv.placeholder = 'HOST:PORT (run server.py)';
     }
+  };
+  window.setDiff = function (d) {
+    window.__diffSolo = Math.max(0, Math.min(2, d | 0));
+    document.querySelectorAll('#diff-row button').forEach(function (b) {
+      b.classList.toggle('sel', +b.getAttribute('data-diff') === window.__diffSolo);
+    });
   };
   window.netStatus = function (t) { const el = $('net-status'); if (el) el.textContent = t || ''; };
 })();

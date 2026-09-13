@@ -40,6 +40,19 @@ takes ~30s to wake.)
 weapons • **R** buy ammo • **Q** upgrade weapon • **E** First Aid • **T** revive
 mate (co-op) • **\`** shop • **ESC** pause / menu.
 
+## Difficulty (homepage, solo + host)
+
+🟢 **EASY** baseline • 🟡 **NORMAL** (tougher/faster/harder-hitting zombies,
++15% prices, +20% coins, +20% kill gates, +25% score) • 🔴 **HARD** (+70% HP,
++15% speed, +45% damage, +30% prices, +50% coins/kill gates/score).
+
+## Arsenal (DPS ordered, pellets counted)
+
+Pistol 131 • Rifle 209 • Shotgun 160 + point-blank 6-pellet burst • SMG 229 •
+Sniper 185 + pierce/range • Minigun 400 • Grenade/Rocket/Mine: AoE specialists •
+Plasma 571 • Bane 1133 • 🔱 Railgun 311 + pierce-5 line that ignores walls.
+Ranges are short on purpose — nothing covers the full court.
+
 ## Co-op rules (short)
 
 - Zombies scale with team size (+35% HP each extra hunter, more spawns).
