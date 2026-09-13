@@ -336,7 +336,7 @@ function makePlayer(slot, name) {
   vx(g, std(0x2a2f3d), 0.26, 0.45, 0.32, -0.18, 0.5, 0);
   vx(g, std(0x2a2f3d), 0.26, 0.45, 0.32, 0.18, 0.5, 0);
   // jacket torso + team chest plate + belt + buckle
-  vx(g, std(0x1e1e28), 0.82, 0.7, 0.52, 0, 1.05, 0, true);
+  vx(g, std(0x2e2e3d), 0.82, 0.7, 0.52, 0, 1.05, 0, true);
   vx(g, new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.3, emissive: color, emissiveIntensity: 0.25 }),
     0.55, 0.45, 0.1, 0, 1.1, 0.27);
   vx(g, std(0x101016), 0.84, 0.12, 0.54, 0, 0.68, 0);
@@ -371,7 +371,7 @@ function makePlayer(slot, name) {
   ring.rotation.x = -Math.PI / 2; ring.position.y = 0.03;
   // dark cloak + tattered strips
   const cloak = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.15, 0.14),
-    new THREE.MeshStandardMaterial({ color: 0x14141c, roughness: 0.95 }));
+    new THREE.MeshStandardMaterial({ color: 0x23232f, roughness: 0.95 }));
   cloak.position.set(0, 1.0, -0.36); cloak.castShadow = true;
   const stripM = new THREE.MeshStandardMaterial({ color: 0x1e1420, roughness: 1 });
   const st1 = new THREE.Mesh(unitBox, stripM);
@@ -1138,28 +1138,28 @@ function updateGuestVisuals(dt) {
 const MAPS = {
   graveyard: {
     label: '🪦 Graveyard',
-    ground: 0x223322, floor: 0x2a4048, grout: 0x0d1518,
-    fogColor: 0x070d0c, fogDensity: 0.028,
-    wall: 0x232b33, gateColor: 0x552222,
-    sky: 0x070d0c, light: 0x6a8899, lightIntensity: 0.55,
+    ground: 0x223322, floor: 0x385563, grout: 0x151f24,
+    fogColor: 0x070d0c, fogDensity: 0.022,
+    wall: 0x2c3540, gateColor: 0x552222,
+    sky: 0x070d0c, light: 0x7a99aa, lightIntensity: 0.8,
     speedMult: 0.9, hpMult: 0.9, scoreMult: 1.0,
     desc: 'foggy'
   },
   city: {
     label: '🏢 City Ruins',
-    ground: 0x3b3b42, floor: 0x2b2f42, grout: 0x11131c,
-    fogColor: 0x080810, fogDensity: 0.02,
-    wall: 0x3a3f4d, gateColor: 0x883300,
-    sky: 0x080810, light: 0x7788aa, lightIntensity: 0.6,
+    ground: 0x3b3b42, floor: 0x39405a, grout: 0x181c28,
+    fogColor: 0x080810, fogDensity: 0.016,
+    wall: 0x484e5e, gateColor: 0x883300,
+    sky: 0x080810, light: 0x8899bb, lightIntensity: 0.85,
     speedMult: 1.0, hpMult: 1.0, scoreMult: 1.2,
     desc: 'urban'
   },
   desert: {
     label: '🌵 Desert Outpost',
-    ground: 0x8a7344, floor: 0x4a3628, grout: 0x191009,
-    fogColor: 0x120c08, fogDensity: 0.016,
-    wall: 0x6a5238, gateColor: 0x662200,
-    sky: 0x120c08, light: 0xcc9966, lightIntensity: 0.65,
+    ground: 0x8a7344, floor: 0x5d4632, grout: 0x241812,
+    fogColor: 0x120c08, fogDensity: 0.013,
+    wall: 0x7a5f42, gateColor: 0x662200,
+    sky: 0x120c08, light: 0xddaa77, lightIntensity: 0.9,
     speedMult: 1.22, hpMult: 1.05, scoreMult: 1.5,
     desc: 'open'
   }
@@ -1344,9 +1344,9 @@ scene.fog = new THREE.FogExp2(0x0a140a, 0.02);
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 200);
 camera.position.set(0, 24, 16);
 
-const hemi = new THREE.HemisphereLight(0x6a8899, 0x0a0a10, 0.55);
+const hemi = new THREE.HemisphereLight(0x7a99aa, 0x101018, 0.85);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xffe0bb, 0.55);
+const sun = new THREE.DirectionalLight(0xffe4c0, 0.75);
 sun.position.set(12, 24, 8);
 sun.castShadow = true;
 sun.shadow.mapSize.set(1024, 1024);
@@ -1355,6 +1355,10 @@ sun.shadow.camera.top = 35; sun.shadow.camera.bottom = -35;
 scene.add(sun);
 const muzzleLight = new THREE.PointLight(0xffcc66, 0, 12);
 scene.add(muzzleLight);
+// soft moonlight that follows the focus: characters always read, venue stays moody
+const fillLight = new THREE.PointLight(0x8899ff, 0.75, 24);
+fillLight.position.set(0, 8, 12);
+scene.add(fillLight);
 
 // world container (rebuilt per map)
 let worldGroup = null;
@@ -1417,7 +1421,7 @@ function addTorch(x, z) {
   const flame = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.55, 7),
     new THREE.MeshBasicMaterial({ color: 0xffcc44 }));
   flame.position.y = 1.75;
-  const light = new THREE.PointLight(0xff7722, 1.6, 15);
+  const light = new THREE.PointLight(0xff7722, 1.9, 15);
   light.position.y = 2.1;
   g.add(base, bowl, outer, flame, light);
   g.position.set(x, 0, z);
@@ -1453,7 +1457,7 @@ function updateTorches() {
   const t = performance.now() * 0.001;
   for (const tc of torches) {
     const f = Math.sin(t * 11 + tc.seed) * 0.5 + Math.sin(t * 23 + tc.seed * 2) * 0.3 + Math.sin(t * 5 + tc.seed) * 0.2;
-    tc.light.intensity = 1.6 + f * 0.45;
+    tc.light.intensity = 1.9 + f * 0.45;
     tc.flame.scale.set(1 + f * 0.12, 1 + f * 0.2, 1 + f * 0.12);
     tc.outer.scale.set(1 - f * 0.06, 1 + f * 0.1, 1 - f * 0.06);
   }
@@ -4279,6 +4283,7 @@ function updateCamera(dt) {
   }
   if (!focus) return;
   const p = focus.group.position;
+  try { fillLight.position.set(p.x, 7, p.z + 2); } catch (e) {}
   const desired = new THREE.Vector3(p.x, 0, p.z).add(new THREE.Vector3(0, 21, 13));
   if (G.shake > 0) {
     G.shake = Math.max(0, G.shake - dt * 2);
@@ -4352,6 +4357,100 @@ function animate() {
   renderer.render(scene, camera);
 }
 
+// ============ INTROSPECTION + SCREENSHOT HOOK (?shot=name) ============
+// window.__game exposes live state for automation; ?shot=<name> stages a
+// deterministic demo scene (menu untouched when absent). Inert in real play.
+window.__game = {
+  net: NET,
+  get G() { return G; },
+  get players() { return players; },
+  get zombies() { return zombies; },
+  get player() { return player; },
+  fn: {
+    startGame: window.startGame, startRound, openPause, toggleShop, showRoom: window.showRoom,
+    killPlayer, hurtPlayer, fireWeapon, nearestPlayer, switchWeapon,
+    syncUnlocks, updateWeaponHUD, renderShop, spawnCoins, spawnZombie, spawnBoss,
+  },
+};
+function shotSetup() {
+  let name = null;
+  try { name = new URLSearchParams(location.search).get('shot'); } catch (e) {}
+  if (!name) return;
+  const run = () => {
+    try {
+      if (name === 'multi') {
+        window.setMode('multi');
+      } else if (name === 'lobby' || name === 'coop-host') {
+        window.setMode('multi');
+        window.netCreate();
+      } else if (name === 'play') {
+        window.startGame('graveyard');
+        G.money = 800; G.kills = 60; G.score = 7050;
+        syncUnlocks();
+        WEAPONS[1].unlocked = true; WEAPONS[1].ammo = WEAPONS[1].maxAmmo;
+        WEAPONS[2].unlocked = true; WEAPONS[2].ammo = WEAPONS[2].maxAmmo;
+        setPlayerWeapon(player, 1);
+        updateWeaponHUD();
+        startRound(6);
+        player.maxHp = 99999; player.hp = 99999; updateHUD(); // staged godmode
+        for (let k = 0; k < 5; k++) {
+          spawnCoins(new THREE.Vector3((Math.random() - 0.5) * 20, 0, 5 + Math.random() * 10), 20);
+        }
+      } else if (name === 'shop') {
+        window.startGame('city');
+        G.money = 3500; G.kills = 260;
+        syncUnlocks();
+        [1, 2, 5].forEach((i) => { WEAPONS[i].unlocked = true; WEAPONS[i].ammo = WEAPONS[i].maxAmmo; });
+        WEAPONS[1].up = 4; refreshWeapon(WEAPONS[1]);
+        WEAPONS[5].up = 2; refreshWeapon(WEAPONS[5]);
+        updateWeaponHUD();
+        startRound(4);
+        toggleShop();
+      } else if (name === 'boss') {
+        window.startGame('city');
+        G.money = 2000; G.kills = 400; G.score = 30100;
+        syncUnlocks();
+        WEAPONS[5].unlocked = true; WEAPONS[5].ammo = WEAPONS[5].maxAmmo;
+        setPlayerWeapon(player, 5);
+        updateWeaponHUD();
+        startRound(10);
+        player.maxHp = 99999; player.hp = 99999; updateHUD(); // staged godmode
+      } else if (name === 'over') {
+        window.startGame('graveyard');
+        G.round = 8; G.kills = 150; G.score = 9000;
+        updateHUD();
+        hurtPlayer(99999, null, player);
+      } else if (name === 'pause') {
+        window.startGame('graveyard');
+        G.money = 500; G.kills = 40;
+        syncUnlocks();
+        startRound(3);
+        player.maxHp = 99999; player.hp = 99999; updateHUD(); // staged godmode
+      } else if (name === 'showroom') {
+        window.showRoom();
+      }
+      // staged combat: auto-aim + fire so shots catch live action
+      if (name === 'play' || name === 'boss' || name === 'coop-host' || name === 'pause') {
+        if (window.__combatTimer) clearInterval(window.__combatTimer);
+        window.__combatTimer = setInterval(() => {
+          try {
+            if (G.state !== 'playing' || !player || !player.alive) return;
+            const tgt = nearestPlayer(player.group.position);
+            if (!tgt) return;
+            const d = tgt.group.position.clone().sub(player.group.position); d.y = 0;
+            if (d.lengthSq() < 0.04) return;
+            d.normalize();
+            player.aim.copy(d);
+            player.group.rotation.y = Math.atan2(d.x, d.z);
+            fireWeapon(player);
+          } catch (e) {}
+        }, 300);
+      }
+    } catch (e) {}
+  };
+  setTimeout(() => requestAnimationFrame(run), 60);
+}
+
 // boot: menu backdrop
 try {
   buildMap('graveyard');
@@ -4363,6 +4462,7 @@ try {
 updateWeaponHUD();
 animate();
 window.__gameBooted = true;
+try { shotSetup(); } catch (e) {}
 // if the user clicked a map before the engine finished loading, start it now
 if (window.__wantedMap) { var m = window.__wantedMap; window.__wantedMap = null; window.startGame(m); }
 })();
