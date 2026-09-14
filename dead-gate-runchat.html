@@ -176,6 +176,7 @@
     <button id="tab-solo" class="active" onclick="window.setMode('solo')">1 PLAYER</button>
     <button id="tab-multi" onclick="window.setMode('multi')">👥 MULTIPLAYER</button>
   </div>
+  <div id="build-tag" style="color:#666;font-size:11px;margin:2px 0 6px;letter-spacing:1px;"></div>
   <div id="diff-row">DIFFICULTY:
     <button data-diff="0" class="sel" onclick="window.setDiff(0)">🟢 EASY</button>
     <button data-diff="1" onclick="window.setDiff(1)">🟡 NORMAL</button>
@@ -306,6 +307,9 @@ const ARENA_HALF = 28;
 // Solo play is untouched: with no room, players[] holds just you and every
 // simHost() branch behaves exactly like the original single-player code.
 const PCOLORS = [0x2266cc, 0xcc7722, 0x8833cc, 0x22cccc];
+// Bump on every gameplay-affecting change so co-op partners can confirm
+// matching builds (shown under the menu tabs + lobby status).
+const BUILD = 'pred-2';
 const NET = {
   ws: null, id: -1, slot: 0, host: false, room: null, name: 'Hunter',
   peers: [], seq: 0, snapTimer: 0, inTimer: 0, mapPick: 'graveyard', diffPick: 0,
@@ -728,7 +732,7 @@ function buildSnapshot() {
       slot: p.slot, x: +p.group.position.x.toFixed(2), z: +p.group.position.z.toFixed(2),
       ax: +(p.aim ? p.aim.x : 0).toFixed(3), az: +(p.aim ? p.aim.z : -1).toFixed(3),
       hp: Math.ceil(p.hp), maxHp: p.maxHp, alive: !!p.alive, wi: p.weaponIndex,
-      mny: Math.round(p.money || 0),
+      mny: Math.round(p.money || 0), spd: +(+p.speed || 9).toFixed(2),
       gh: p.ghost ? 1 : 0, kit: p.kit || 0,
       cx: p.corpsePos ? +p.corpsePos.x.toFixed(2) : null,
       cz: p.corpsePos ? +p.corpsePos.z.toFixed(2) : null,
@@ -861,10 +865,31 @@ function applySnapshot(s) {
           if (d.slot === NET.slot) player = p;
         }
         p._tx = d.x; p._tz = d.z;
-        // Snap the local player harder to avoid floaty controls; lerp mates.
-        if (p === player) { p.group.position.x = d.x; p.group.position.z = d.z; }
-        p.aim.set(d.ax || 0, 0, (d.az === undefined ? -1 : d.az));
-        if (p.aim.lengthSq() > 0.04) p.group.rotation.y = Math.atan2(p.aim.x, p.aim.z);
+        // Own hunter is predicted locally (see updateGuestVisuals): keep a
+        // short snapshot history so we can extrapolate to the host's NOW.
+        // Teleport-scale jumps (revive/rebirth/round-start) snap immediately.
+        // Aim/rotation stay local too — the snapshot only echoes our own input.
+        if (p === player && p.group) {
+          const now = performance.now() / 1000;
+          p._hist = p._hist || [];
+          const last = p._hist[p._hist.length - 1];
+          if (!last) {
+            p.group.position.x = d.x; p.group.position.z = d.z;
+            p._hist = [{ x: d.x, z: d.z, t: now }];
+          } else {
+            const jx = d.x - last.x, jz = d.z - last.z;
+            if (jx * jx + jz * jz > 12.25) { // >3.5u between snaps: teleport
+              p.group.position.x = d.x; p.group.position.z = d.z;
+              p._hist = [{ x: d.x, z: d.z, t: now }];
+            } else {
+              p._hist.push({ x: d.x, z: d.z, t: now });
+              if (p._hist.length > 3) p._hist.shift();
+            }
+          }
+        } else {
+          p.aim.set(d.ax || 0, 0, (d.az === undefined ? -1 : d.az));
+          if (p.aim.lengthSq() > 0.04) p.group.rotation.y = Math.atan2(p.aim.x, p.aim.z);
+        }
         p.hp = d.hp; p.maxHp = d.maxHp; p.alive = !!d.alive;
         p.money = d.mny || 0;
         p.kit = d.kit || 0;
@@ -1015,7 +1040,7 @@ function netTick(dt) {
         }
       } catch (e) {}
       NET.snapTimer += dt;
-      if (NET.snapTimer >= 0.12) {
+      if (NET.snapTimer >= 0.10) { // ~10Hz: fresher truth, still tiny packets
         NET.snapTimer = 0;
         if (typeof G !== 'undefined' && (G.state === 'playing' || G.state === 'intermission')) {
           try { netSend(buildSnapshot()); } catch (e) {}
@@ -1047,7 +1072,47 @@ function updateGuestVisuals(dt) {
     const k = 1 - Math.pow(0.0001, dt); // frame-rate independent lerp
     for (const p of players) {
       if (!p || !p.group) continue;
-      if (p._tx !== undefined && p !== player) {
+      if (p === player) {
+        // Client-side prediction: walk yourself instantly with local keys,
+        // then converge toward the host's truth (snapshots correct drift,
+        // knockbacks and teleports). No firing/pickups/damage here — the
+        // host stays authoritative for all of that.
+        if (p.alive || p.ghost) {
+          let mx = 0, mz = 0;
+          if (keys.KeyW || keys.ArrowUp) mz -= 1;
+          if (keys.KeyS || keys.ArrowDown) mz += 1;
+          if (keys.KeyA || keys.ArrowLeft) mx -= 1;
+          if (keys.KeyD || keys.ArrowRight) mx += 1;
+          const len = Math.hypot(mx, mz);
+          if (len > 0) {
+            mx /= len; mz /= len;
+            p.group.position.x += mx * p.speed * dt;
+            p.group.position.z += mz * p.speed * dt;
+          }
+        }
+        // Reconcile toward where the host is NOW: extrapolate the snapshot
+        // history forward by its own velocity (+ a tick of batching lag).
+        // This removes the systematic drag of chasing stale positions —
+        // prediction and target agree, so only true drift gets corrected.
+        const hh = p._hist || [];
+        if (hh.length) {
+          const last = hh[hh.length - 1];
+          let hvx = 0, hvz = 0;
+          if (hh.length >= 2) {
+            const a = hh[hh.length - 2];
+            const hdt = Math.max(0.05, last.t - a.t);
+            hvx = (last.x - a.x) / hdt; hvz = (last.z - a.z) / hdt;
+            const hsp = Math.hypot(hvx, hvz), msp = p.speed * 1.15 + 0.3;
+            if (hsp > msp) { hvx *= msp / hsp; hvz *= msp / hsp; }
+          }
+          const now2 = performance.now() / 1000;
+          const look = Math.min(0.5, Math.max(0, now2 - last.t) + 0.06);
+          const tx = last.x + hvx * look, tz = last.z + hvz * look;
+          const ck = 1 - Math.pow(0.001, dt); // firm: residual error is real drift
+          p.group.position.x += (tx - p.group.position.x) * ck;
+          p.group.position.z += (tz - p.group.position.z) * ck;
+        }
+      } else if (p._tx !== undefined) {
         p.group.position.x += (p._tx - p.group.position.x) * k;
         p.group.position.z += (p._tz - p.group.position.z) * k;
       }
@@ -4462,6 +4527,10 @@ try {
 updateWeaponHUD();
 animate();
 window.__gameBooted = true;
+try {
+  const bt = document.getElementById('build-tag');
+  if (bt) bt.textContent = 'build ' + BUILD + ' — all players must match';
+} catch (e) {}
 try { shotSetup(); } catch (e) {}
 // if the user clicked a map before the engine finished loading, start it now
 if (window.__wantedMap) { var m = window.__wantedMap; window.__wantedMap = null; window.startGame(m); }
