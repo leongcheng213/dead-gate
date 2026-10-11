@@ -1,0 +1,12 @@
+.git/
+shots/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+dead-gate-runchat.html
+share-server.ps1
+build-bundle.ps1
+render.yaml
+README.md
+.gitignore

@@ -1,0 +1,20 @@
+# DEAD GATE - Fly.io config. Free-tier shape: ONE shared 256MB machine in
+# Sydney (~$2/mo, inside the $5 Hobby credit), sleeps to zero when idle.
+# NOTE: change `app` to a globally-unique name (or let `fly launch` pick one).
+app = 'dead-gate'
+primary_region = 'syd'
+
+# No [build] section: fly auto-detects ./Dockerfile.
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+[[vm]]
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 256

@@ -34,6 +34,24 @@ Anyone on the internet can then co-op: all players open the same URL →
 no firewall, no PowerShell needed. (Free tier sleeps after idle — first load
 takes ~30s to wake.)
 
+## Deploy to Fly.io (free, Sydney = low AU ping)
+
+`Dockerfile` + `fly.toml` ship ready (one shared-256MB machine in `syd`,
+sleeps to zero when idle — inside the $5 Hobby credit, i.e. effectively $0;
+a card on file is still required, so glance at billing the first month):
+
+```powershell
+cd "game assets"
+# one-time: install flyctl, then
+fly auth signup   # or: fly auth login
+fly launch --no-deploy   # pick a unique app name when asked
+fly deploy
+```
+
+Keep it to **one machine** (`fly status` / `fly machine list` — if launch made
+two, `fly scale count 1`). The game URL becomes
+`https://<your-app>.fly.dev`.
+
 ## Controls
 
 **WASD** move • **Mouse** aim • **SPACE**/click shoot • **1–=**/wheel/click-boxes
