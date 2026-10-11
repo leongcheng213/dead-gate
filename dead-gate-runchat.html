@@ -4283,34 +4283,34 @@ function spitAt(z, opts, tgt) {
 }
 // Which zombie breed spawns: new powers join the pool every 10 rounds.
 // Which zombie breed spawns: trickier breeds join as rounds climb —
-// spitters (5), dashers (7), bombers (10), leapers (12), speeders (15),
-// splitters (16), menders (20), shades (24).
+// spitters (3), dashers (6), bombers (8), leapers (10), speeders (12),
+// splitters (13), menders (16), shades (20).
 function pickZombieType() {
   const r = G.round, roll = Math.random();
-  if (r >= 24) {
+  if (r >= 20) {
     if (roll < 0.10) return 'shade'; if (roll < 0.20) return 'mender';
     if (roll < 0.32) return 'splitter'; if (roll < 0.42) return 'leaper';
     if (roll < 0.50) return 'dasher'; if (roll < 0.60) return 'speeder';
     if (roll < 0.70) return 'bomber'; if (roll < 0.85) return 'spitter';
-  } else if (r >= 20) {
+  } else if (r >= 16) {
     if (roll < 0.10) return 'mender'; if (roll < 0.22) return 'splitter';
     if (roll < 0.32) return 'leaper'; if (roll < 0.42) return 'dasher';
     if (roll < 0.54) return 'speeder'; if (roll < 0.66) return 'bomber';
     if (roll < 0.81) return 'spitter';
-  } else if (r >= 16) {
+  } else if (r >= 13) {
     if (roll < 0.12) return 'splitter'; if (roll < 0.24) return 'leaper';
     if (roll < 0.34) return 'dasher'; if (roll < 0.48) return 'speeder';
     if (roll < 0.60) return 'bomber'; if (roll < 0.76) return 'spitter';
-  } else if (r >= 12) {
+  } else if (r >= 10) {
     if (roll < 0.12) return 'leaper'; if (roll < 0.24) return 'dasher';
     if (roll < 0.36) return 'speeder'; if (roll < 0.48) return 'bomber';
     if (roll < 0.66) return 'spitter';
-  } else if (r >= 10) {
+  } else if (r >= 8) {
     if (roll < 0.14) return 'dasher'; if (roll < 0.28) return 'bomber';
     if (roll < 0.48) return 'spitter';
-  } else if (r >= 7) {
+  } else if (r >= 6) {
     if (roll < 0.14) return 'dasher'; if (roll < 0.34) return 'spitter';
-  } else if (r >= 5) { if (roll < 0.20) return 'spitter'; }
+  } else if (r >= 3) { if (roll < 0.20) return 'spitter'; }
   return 'normal';
 }
 // tiny particle bursts
